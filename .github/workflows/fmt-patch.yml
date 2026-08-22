@@ -1,0 +1,34 @@
+name: Formatierungs-Patch
+
+# Auf diesem Rechner ist bewusst keine Rust-Toolchain installiert.
+# Dieser Workflow laesst `cargo fmt` auf einem Runner laufen und legt das
+# Ergebnis als anwendbaren Patch ab:  gh run download <id> && git apply fmt.patch
+on:
+  workflow_dispatch:
+
+jobs:
+  fmt-patch:
+    name: cargo fmt als Patch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust-Toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Formatieren und Patch erzeugen
+        run: |
+          cargo fmt --all
+          git diff > fmt.patch
+          if [ -s fmt.patch ]; then
+            echo "Patch erzeugt:"
+            git diff --stat
+          else
+            echo "Bereits sauber formatiert – kein Patch noetig."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fmt-patch
+          path: fmt.patch
+          if-no-files-found: warn

@@ -31,9 +31,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo-audit installieren
+        run: cargo install cargo-audit --locked
+
+      # Bewusst nur echte Schwachstellen lassen den Job scheitern.
+      # Die "unmaintained"-Hinweise stammen fast alle aus den GTK3-Bindings,
+      # die Tauri nur fuer Linux mitschleppt und die im macOS-Build gar nicht
+      # uebersetzt werden. Sie werden trotzdem ausgegeben, nur nicht als Fehler.
+      - name: cargo audit
+        run: |
+          cargo audit --json --file Cargo.lock > audit.json || true
+          python3 - <<'PY'
+          import json, sys
+          report = json.load(open("audit.json"))
+          vulns = report["vulnerabilities"]
+          print(f"Schwachstellen: {vulns['count']}")
+          for entry in vulns["list"]:
+              adv = entry["advisory"]
+              print(f"  {adv['id']}  {adv['package']}  {adv['title']}")
+          for kind, items in sorted(report.get("warnings", {}).items()):
+              print(f"Hinweis ({kind}): {len(items)}")
+              for item in items:
+                  print(f"  {item['advisory']['id']}  {item['package']['name']}")
+          sys.exit(1 if vulns["found"] else 0)
+          PY
 
   build:
     name: DMG bauen
