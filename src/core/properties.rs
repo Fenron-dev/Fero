@@ -230,10 +230,7 @@ mod tests {
         let media_path =
             RelativePath::new("Anime/Violet Evergarden.mkv").expect("media path should be valid");
         let sidecar = sidecar_path_for(&media_path).expect("sidecar path should be valid");
-        assert_eq!(
-            sidecar.to_string(),
-            "Anime/Violet Evergarden.mkv.fero.yaml"
-        );
+        assert_eq!(sidecar.to_string(), "Anime/Violet Evergarden.mkv.fero.yaml");
     }
 
     /// Same stem, different container: both files must keep their own sidecar.
