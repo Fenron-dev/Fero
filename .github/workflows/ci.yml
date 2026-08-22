@@ -61,16 +61,12 @@ jobs:
     name: DMG bauen
     needs: check
     runs-on: macos-14
-    # Signier-Secrets muessen auf Job-Ebene stehen: in einer `if`-Bedingung
-    # wird nur der Job-/Workflow-Kontext ausgewertet, nicht das `env` des
-    # Schritts selbst. Sonst wird der Zertifikatsimport immer uebersprungen.
     env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Nur als Schalter fuer `if:`. Die echten APPLE_*-Namen duerfen hier
+      # NICHT stehen: fehlt ein Secret, definiert GitHub die Variable
+      # trotzdem - als leeren String. Tauris Bundler prueft aber nur, ob sie
+      # vorhanden ist, und laeuft dann in einen Keychain-Import ohne Zertifikat.
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,28 +80,32 @@ jobs:
       - name: tauri-cli installieren
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Apple-Zertifikat importieren
-        if: env.APPLE_CERTIFICATE != ''
+      - name: Signaturstatus
         run: |
-          KEYCHAIN=build.keychain
-          KEYCHAIN_PASSWORD="$(uuidgen)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security default-keychain -s "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
-          security import certificate.p12 -k "$KEYCHAIN" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          rm -f certificate.p12
+          if [ "$HAS_APPLE_CERT" = "true" ]; then
+            echo "Apple-Zertifikat vorhanden - DMG wird signiert."
+          else
+            echo "Kein APPLE_CERTIFICATE-Secret - DMG wird ad-hoc signiert."
+            echo "Beim ersten Start meldet macOS dann 'nicht verifizierter Entwickler'."
+          fi
 
+      # Den Keychain-Import macht der Tauri-Bundler selbst, sobald
+      # APPLE_CERTIFICATE und APPLE_CERTIFICATE_PASSWORD gesetzt sind.
       - name: Build (universal DMG)
-        run: cargo tauri build --target universal-apple-darwin
-
-      - name: Zertifikat/Keychain aufraeumen
-        if: always() && env.APPLE_CERTIFICATE != ''
-        run: security delete-keychain build.keychain || true
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Leer gebliebene Signier-Variablen entfernen, siehe Kommentar oben.
+          for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
+                     APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!var}" ]; then unset "$var"; fi
+          done
+          cargo tauri build --target universal-apple-darwin
 
       - uses: actions/upload-artifact@v4
         with:
