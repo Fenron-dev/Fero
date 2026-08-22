@@ -184,6 +184,38 @@ query ($search: String!) {
 }
 "#;
 
+/// Compact query for manga lookups (type MANGA, comic formats only).
+///
+/// Deliberately excludes `NOVEL` so a light novel adaptation cannot be
+/// matched onto its comic counterpart — that is what [`ANILIST_NOVEL_QUERY`]
+/// is for.
+const ANILIST_MANGA_QUERY: &str = r#"
+query ($search: String!) {
+  Page(page: 1, perPage: 1) {
+    media(search: $search, type: MANGA, format_in: [MANGA, ONE_SHOT], sort: SEARCH_MATCH) {
+      id
+      siteUrl
+      title {
+        romaji
+        english
+        native
+      }
+      description(asHtml: false)
+      status
+      genres
+      averageScore
+      tags {
+        name
+      }
+      coverImage {
+        extraLarge
+        large
+      }
+    }
+  }
+}
+"#;
+
 const ANILIST_MEDIA_SEARCH_QUERY: &str = r#"
 query ($search: String!, $isAdult: Boolean, $page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
@@ -403,6 +435,33 @@ impl AniListClient {
     /// Uses `type: MANGA, format_in: [NOVEL]` — AniList files light novels
     /// under the manga type with a dedicated NOVEL format.
     pub fn search_novel(&self, search: &str) -> Result<Option<AniListNovelMetadata>> {
+        self.search_manga_shaped(ANILIST_NOVEL_QUERY, search)
+    }
+
+    /// Searches AniList for a manga (comic formats) and returns the best match.
+    ///
+    /// Shares the response shape with [`Self::search_novel`]; only the format
+    /// filter differs.
+    ///
+    /// # Parameters
+    /// - `search` – Series title as scraped from the source site
+    ///
+    /// # Returns
+    /// - `Ok(Some(metadata))` – Best match for the title
+    /// - `Ok(None)` – AniList knows no series under that name
+    ///
+    /// # Errors
+    /// - `VaultError::ExternalApi` on transport failures or non-2xx responses
+    pub fn search_manga(&self, search: &str) -> Result<Option<AniListNovelMetadata>> {
+        self.search_manga_shaped(ANILIST_MANGA_QUERY, search)
+    }
+
+    /// Runs one of the compact `type: MANGA` queries and maps the first hit.
+    fn search_manga_shaped(
+        &self,
+        query: &str,
+        search: &str,
+    ) -> Result<Option<AniListNovelMetadata>> {
         let client = Client::builder()
             .timeout(Duration::from_secs(12))
             .build()
@@ -416,7 +475,7 @@ impl AniListClient {
         }
 
         let body = serde_json::json!({
-            "query": ANILIST_NOVEL_QUERY,
+            "query": query,
             "variables": { "search": search }
         })
         .to_string();

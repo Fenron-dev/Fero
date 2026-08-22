@@ -23,7 +23,12 @@
 .fero/
 *.fero.yaml
 webnovel_sessions.json
+webnovel_debug.log*
 state.json
+api_keys.toml
+*.key
+*.secret
+*.local
 .env
 .env.*
 *.pem
@@ -32,5 +37,13 @@ state.json
 *.mobileprovision
 secrets.json
 
-# Interner Analysebericht – bleibt lokal, nicht ins oeffentliche Repo.
+# Editor-/Agenten-Konfiguration.
+.claude/
+
+# Interne Arbeitsdokumente – bleiben lokal, nicht ins oeffentliche Repo.
+# Das Konzept steuert den Umbau, gehoert aber nicht in die Veroeffentlichung;
+# CLAUDE.md/AGENTS.md waren schon im Ursprungsrepo ausgeschlossen.
 DEEPDIVE_*.md
+Dokumentation/
+CLAUDE.md
+AGENTS.md

@@ -57,6 +57,7 @@
           <button class="nav-item" data-tab="collections">Sammlungen</button>
           <button class="nav-item" data-tab="playlists">Wiedergabelisten</button>
           <button class="nav-item" data-tab="webnovels">Webnovels</button>
+          <button class="nav-item" data-tab="mangas">Mangas</button>
           <button class="nav-item" data-tab="settings">Einstellungen</button>
           <button class="nav-item" data-tab="trash">Papierkorb</button>
         </nav>
@@ -513,6 +514,83 @@
                 <button class="action-button" id="webnovel-debug-refresh">Aktualisieren</button>
               </div>
               <pre class="debug-log-pre" id="webnovel-debug-content"></pre>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="mangas">
+          <section class="panel">
+            <p class="panel-label">Manga-Abos</p>
+            <h3>Manga per Link abonnieren</h3>
+            <div class="webnovel-subscribe-row">
+              <input
+                id="manga-url-input"
+                type="text"
+                placeholder="https://www.mangatown.com/manga/..."
+              />
+              <button class="action-button primary" id="manga-subscribe-btn">Abonnieren</button>
+              <button class="action-button" id="manga-check-all-btn">Jetzt alle prüfen</button>
+            </div>
+            <p class="field-hint" id="manga-sources-hint"></p>
+            <p class="field-hint" id="manga-feedback"></p>
+            <div class="webnovel-progress" id="manga-job-progress" hidden>
+              <p class="field-hint" id="manga-job-text"></p>
+              <div class="webnovel-progress-track">
+                <div class="webnovel-progress-bar" id="manga-job-bar"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <p class="panel-label">Einstellungen</p>
+            <div class="webnovel-subscribe-row">
+              <label class="field-hint" for="manga-delay-input">Pause zwischen Anfragen (ms)</label>
+              <input id="manga-delay-input" type="number" min="500" max="5000" step="100" value="1500" />
+              <label class="field-hint" for="manga-max-chapters">Max. Kapitel pro Durchlauf</label>
+              <input id="manga-max-chapters" type="number" min="1" max="2000" step="10" value="50" />
+            </div>
+            <p class="field-hint">
+              Ein Manga-Kapitel sind viele einzelne Bilder. Das Limit verhindert, dass ein Abo mit
+              tausenden Kapiteln den Rechner tagelang beschäftigt — der nächste Durchlauf macht dort
+              weiter, wo dieser aufgehört hat.
+            </p>
+          </section>
+
+          <section class="panel webnovel-library">
+            <div class="webnovel-toolbar">
+              <div class="webnovel-filters" id="manga-filters">
+                <button class="webnovel-chip is-active" data-manga-filter="all">Alle</button>
+                <button class="webnovel-chip" data-manga-filter="ongoing">Laufend</button>
+                <button class="webnovel-chip" data-manga-filter="completed">Abgeschlossen</button>
+                <button class="webnovel-chip" data-manga-filter="paused">Pausiert</button>
+                <button class="webnovel-chip" data-manga-filter="error">Fehler</button>
+                <button class="webnovel-chip" data-manga-filter="new">Neue Kapitel</button>
+                <button class="webnovel-chip" data-manga-filter="trash">Papierkorb</button>
+              </div>
+            </div>
+            <div class="stack webnovel-list" id="manga-list"></div>
+            <p class="body-copy" id="manga-list-empty">Noch keine Abos vorhanden.</p>
+          </section>
+
+          <section class="workspace-modal" id="manga-detail" hidden>
+            <div class="workspace-modal-card">
+              <button class="action-button workspace-modal-close" id="manga-detail-close">✕ Schließen</button>
+              <div class="webnovel-detail-grid">
+                <div class="webnovel-detail-side">
+                  <img id="manga-detail-cover" alt="Cover" hidden />
+                  <h3 id="manga-detail-title"></h3>
+                  <p class="webnovel-card-meta" id="manga-detail-author"></p>
+                </div>
+                <div class="webnovel-detail-main">
+                  <div id="manga-detail-badges"></div>
+                  <p class="body-copy" id="manga-detail-description"></p>
+                  <p class="webnovel-card-meta" id="manga-detail-genres"></p>
+                  <p class="webnovel-card-meta" id="manga-detail-chapters"></p>
+                  <p class="webnovel-card-meta is-error" id="manga-detail-error" hidden></p>
+                  <div class="toolbar" id="manga-detail-links"></div>
+                  <div class="webnovel-card-actions" id="manga-detail-actions"></div>
+                </div>
+              </div>
             </div>
           </section>
         </section>

@@ -1,221 +1,44 @@
 //! # core::webnovel
 //!
-//! Persistent webnovel subscription store.
+//! Webnovel subscription store.
+//!
+//! ## Relationship to `core::subscription`
+//! The record shape, identity rules, trash, and blocklist are shared with the
+//! manga engine and live in [`crate::core::subscription`].  This module binds
+//! that generic store to the `webnovels` directory so callers keep a
+//! self-documenting API (`webnovels_dir`, `webnovel_trash_dir`) and cannot
+//! accidentally read a manga record through a webnovel call.
 //!
 //! ## Storage layout
-//! Each subscription is stored as a single JSON file under
-//! `<vault>/.fero/webnovels/<key>.json`, where `<key>` is a hex-encoded
-//! FNV-1a-64 hash of the normalized subscription URL.  Hashing keeps the file
-//! name short and filesystem-safe regardless of URL characters.
-//!
-//! ## Chapter identity rules
-//! A chapter is identified by its **URL**, never by its title (titles are
-//! routinely edited upstream).  Chapter `index` reflects the table-of-contents
-//! order at the time the chapter was first seen.  If a known URL later
-//! disappears from the ToC, the local record is kept — downloaded content is
-//! never discarded because of upstream changes.  Newly appearing chapters are
-//! appended with fresh indices.
+//! `<vault>/.fero/webnovels/<subscription-id>.json`, soft-deleted
+//! records under `.../webnovels/trash/`.
 //!
 //! ## Dependencies
+//! - `core::subscription` – record types and store implementation
 //! - `core::vault::Vault` – directory resolution (callers pass `system_dir()`)
 
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use crate::core::subscription;
+use crate::error::Result;
 
-use crate::error::{Result, VaultError};
+pub use crate::core::subscription::{
+    blocked_reason, blocklist_file_path, is_valid_subscription_id, load_blocked_hosts,
+    load_blocklist_entries, normalize_url, save_user_blocklist, subscription_id, unix_now,
+    BlocklistEntry, KnownChapter, Subscription,
+};
 
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-
-/// A subscribed webnovel and its chapter bookkeeping.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Subscription {
-    /// Stable identifier — FNV-1a-64 hex of the normalized URL.
-    pub id: String,
-    /// Normalized overview/ToC page URL as subscribed.
-    pub url: String,
-    /// Source adapter id: `royalroad`, `wordpress`, `generic`, `novelupdates`.
-    pub source: String,
-    /// Novel title as reported by the source.
-    pub title: String,
-    /// Directory name used for this novel's files inside `<vault>/Webnovels`.
-    ///
-    /// Pinned at subscribe time so a later upstream title change (or a scrape
-    /// that returns an empty title) can never redirect file operations at a
-    /// different folder.  `None` means "derive from the title" and exists only
-    /// for records written before this field was introduced.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_name: Option<String>,
-    /// Author, if the source exposes one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
-    /// Cover image URL, if the source exposes one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cover_url: Option<String>,
-    /// Synopsis/description, if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Genre names from the source site or AniList.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub genres: Vec<String>,
-    /// Free-form tags from the source site or AniList.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-    /// Goodreads book URL, when a match was found.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub goodreads_url: Option<String>,
-    /// External community rating (Goodreads 0–5), when available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rating_external: Option<f32>,
-    /// AniList media id, when a NOVEL-format match was found.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anilist_id: Option<u32>,
-    /// AniList detail URL for the matched light novel.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anilist_url: Option<String>,
-    /// Marked as finished — suppresses batch EPUBs and periodic checks.
-    #[serde(default)]
-    pub completed: bool,
-    /// Abandoned upstream (never finished) — periodic checks are skipped.
-    #[serde(default)]
-    pub hiatus: bool,
-    /// Paused subscriptions are skipped by checks but keep their data.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// All chapters ever seen in the ToC, in first-seen order.
-    #[serde(default)]
-    pub known_chapters: Vec<KnownChapter>,
-    /// UNIX timestamp of the last completed update check.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_check_unix: Option<u64>,
-    /// Human-readable error from the last failed check, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-    /// UNIX timestamp of subscription creation.
-    pub created_at_unix: u64,
-    /// Set while the subscription sits in the in-app trash (soft delete).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trashed_at_unix: Option<u64>,
-}
-
-/// One chapter as tracked by a subscription.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KnownChapter {
-    /// 1-based position in ToC order at the time the chapter was first seen.
-    pub index: u32,
-    /// Chapter title as shown in the ToC.
-    pub title: String,
-    /// Chapter URL — the identity key for deduplication.
-    pub url: String,
-    /// Set once the chapter content is cached locally; `None` means the
-    /// chapter was seen in the ToC but not downloaded yet (resume support).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub downloaded_at_unix: Option<u64>,
-}
-
-impl Subscription {
-    /// Creates a new subscription for a normalized URL.
-    pub fn new(
-        url: impl Into<String>,
-        source: impl Into<String>,
-        title: impl Into<String>,
-    ) -> Self {
-        let url = url.into();
-        Self {
-            id: subscription_id(&url),
-            url,
-            source: source.into(),
-            title: title.into(),
-            folder_name: None,
-            author: None,
-            cover_url: None,
-            description: None,
-            genres: Vec::new(),
-            tags: Vec::new(),
-            goodreads_url: None,
-            rating_external: None,
-            anilist_id: None,
-            anilist_url: None,
-            completed: false,
-            hiatus: false,
-            enabled: true,
-            known_chapters: Vec::new(),
-            last_check_unix: None,
-            last_error: None,
-            created_at_unix: unix_now(),
-            trashed_at_unix: None,
-        }
-    }
-
-    /// Number of chapters whose content is cached locally.
-    pub fn downloaded_count(&self) -> usize {
-        self.known_chapters
-            .iter()
-            .filter(|chapter| chapter.downloaded_at_unix.is_some())
-            .count()
-    }
-}
-
-/// Normalizes a subscription URL so equivalent inputs map to one identity.
-///
-/// Strips the fragment and trailing slashes and trims whitespace.  Scheme and
-/// host casing are left to the caller's input; in practice pasted URLs are
-/// already lowercase there.
-pub fn normalize_url(url: &str) -> String {
-    let trimmed = url.trim();
-    let without_fragment = match trimmed.split_once('#') {
-        Some((base, _fragment)) => base,
-        None => trimmed,
-    };
-    without_fragment.trim_end_matches('/').to_string()
-}
-
-/// Derives the stable subscription id for a normalized URL.
-pub fn subscription_id(url: &str) -> String {
-    format!("{:016x}", fnv1a64(normalize_url(url).as_bytes()))
-}
-
-/// Length of a subscription id in hex characters (FNV-1a-64).
-const SUBSCRIPTION_ID_LEN: usize = 16;
-
-/// Whether a string is a well-formed subscription id.
-///
-/// Ids reach the store straight from request bodies and are interpolated into
-/// file names, so anything that is not exactly the generated shape
-/// (`[0-9a-f]{16}`) is rejected before it can touch the filesystem.
-pub fn is_valid_subscription_id(candidate: &str) -> bool {
-    candidate.len() == SUBSCRIPTION_ID_LEN
-        && candidate
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-/// Returns an error unless `candidate` is a well-formed subscription id.
-fn ensure_valid_subscription_id(candidate: &str) -> Result<()> {
-    if is_valid_subscription_id(candidate) {
-        return Ok(());
-    }
-    Err(VaultError::InvalidProperty(format!(
-        "invalid subscription id: {candidate}"
-    )))
-}
-
-// ---------------------------------------------------------------------------
-// Store operations
-// ---------------------------------------------------------------------------
+/// Store directory name for webnovel subscriptions.
+const STORE: &str = "webnovels";
 
 /// Returns the directory where subscription JSON files are stored.
 pub fn webnovels_dir(system_dir: &Path) -> PathBuf {
-    system_dir.join("webnovels")
+    subscription::store_dir(system_dir, STORE)
 }
 
 /// Returns the file path for a specific subscription id.
 pub fn subscription_file_path(system_dir: &Path, subscription_id: &str) -> PathBuf {
-    webnovels_dir(system_dir).join(format!("{subscription_id}.json"))
+    subscription::subscription_file_path(system_dir, STORE, subscription_id)
 }
 
 /// Loads a subscription by id, if one exists.
@@ -223,15 +46,7 @@ pub fn subscription_file_path(system_dir: &Path, subscription_id: &str) -> PathB
 /// # Errors
 /// - `VaultError::InvalidProperty` if `subscription_id` is not a generated id
 pub fn load_subscription(system_dir: &Path, subscription_id: &str) -> Result<Option<Subscription>> {
-    ensure_valid_subscription_id(subscription_id)?;
-    let path = subscription_file_path(system_dir, subscription_id);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = fs::read_to_string(&path).map_err(VaultError::from)?;
-    let subscription: Subscription = serde_json::from_str(&raw)
-        .map_err(|e| VaultError::Serialization(format!("subscription JSON parse error: {e}")))?;
-    Ok(Some(subscription))
+    subscription::load_subscription(system_dir, STORE, subscription_id)
 }
 
 /// Persists a subscription, creating the store directory if needed.
@@ -239,24 +54,12 @@ pub fn load_subscription(system_dir: &Path, subscription_id: &str) -> Result<Opt
 /// # Errors
 /// - `VaultError::InvalidProperty` if the record carries a malformed id
 pub fn save_subscription(system_dir: &Path, subscription: &Subscription) -> Result<()> {
-    ensure_valid_subscription_id(&subscription.id)?;
-    let dir = webnovels_dir(system_dir);
-    fs::create_dir_all(&dir).map_err(VaultError::from)?;
-    let path = subscription_file_path(system_dir, &subscription.id);
-    let json = serde_json::to_string_pretty(subscription).map_err(|e| {
-        VaultError::Serialization(format!("subscription JSON serialize error: {e}"))
-    })?;
-    fs::write(&path, json).map_err(VaultError::from)?;
-    Ok(())
+    subscription::save_subscription(system_dir, STORE, subscription)
 }
 
 /// Directory holding soft-deleted subscription records.
 pub fn webnovel_trash_dir(system_dir: &Path) -> PathBuf {
-    webnovels_dir(system_dir).join("trash")
-}
-
-fn trashed_file_path(system_dir: &Path, subscription_id: &str) -> PathBuf {
-    webnovel_trash_dir(system_dir).join(format!("{subscription_id}.json"))
+    subscription::trash_dir(system_dir, STORE)
 }
 
 /// Moves a subscription record into the in-app trash (reversible).
@@ -266,73 +69,28 @@ pub fn trash_subscription(
     system_dir: &Path,
     subscription_id: &str,
 ) -> Result<Option<Subscription>> {
-    ensure_valid_subscription_id(subscription_id)?;
-    let Some(mut subscription) = load_subscription(system_dir, subscription_id)? else {
-        return Ok(None);
-    };
-    subscription.trashed_at_unix = Some(unix_now());
-    let trash_dir = webnovel_trash_dir(system_dir);
-    fs::create_dir_all(&trash_dir).map_err(VaultError::from)?;
-    let json = serde_json::to_string_pretty(&subscription)
-        .map_err(|e| VaultError::Serialization(format!("subscription serialize error: {e}")))?;
-    fs::write(trashed_file_path(system_dir, subscription_id), json).map_err(VaultError::from)?;
-    fs::remove_file(subscription_file_path(system_dir, subscription_id))
-        .map_err(VaultError::from)?;
-    Ok(Some(subscription))
+    subscription::trash_subscription(system_dir, STORE, subscription_id)
 }
 
 /// Restores a trashed subscription back into the active list.
 pub fn restore_subscription(system_dir: &Path, subscription_id: &str) -> Result<Subscription> {
-    ensure_valid_subscription_id(subscription_id)?;
-    let path = trashed_file_path(system_dir, subscription_id);
-    let raw = fs::read_to_string(&path).map_err(VaultError::from)?;
-    let mut subscription: Subscription = serde_json::from_str(&raw)
-        .map_err(|e| VaultError::Serialization(format!("subscription parse error: {e}")))?;
-    subscription.trashed_at_unix = None;
-    save_subscription(system_dir, &subscription)?;
-    fs::remove_file(&path).map_err(VaultError::from)?;
-    Ok(subscription)
+    subscription::restore_subscription(system_dir, STORE, subscription_id)
 }
 
 /// Lists all trashed subscriptions (newest first).
 pub fn list_trashed_subscriptions(system_dir: &Path) -> Result<Vec<Subscription>> {
-    let dir = webnovel_trash_dir(system_dir);
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut trashed: Vec<Subscription> = fs::read_dir(&dir)
-        .map_err(VaultError::from)?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                return None;
-            }
-            serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()
-        })
-        .collect();
-    trashed.sort_by_key(|subscription| std::cmp::Reverse(subscription.trashed_at_unix));
-    Ok(trashed)
+    subscription::list_trashed_subscriptions(system_dir, STORE)
 }
 
 /// Permanently removes a trashed subscription record.
 pub fn purge_trashed_subscription(system_dir: &Path, subscription_id: &str) -> Result<()> {
-    ensure_valid_subscription_id(subscription_id)?;
-    let path = trashed_file_path(system_dir, subscription_id);
-    if path.exists() {
-        fs::remove_file(&path).map_err(VaultError::from)?;
-    }
-    Ok(())
+    subscription::purge_trashed_subscription(system_dir, STORE, subscription_id)
 }
 
 /// Deletes a subscription record.  The novel's downloaded files are NOT
 /// touched — callers decide separately whether to remove the vault folder.
 pub fn delete_subscription(system_dir: &Path, subscription_id: &str) -> Result<()> {
-    ensure_valid_subscription_id(subscription_id)?;
-    let path = subscription_file_path(system_dir, subscription_id);
-    if path.exists() {
-        fs::remove_file(&path).map_err(VaultError::from)?;
-    }
-    Ok(())
+    subscription::delete_subscription(system_dir, STORE, subscription_id)
 }
 
 /// Returns all subscriptions, sorted by creation time (oldest first).
@@ -340,166 +98,7 @@ pub fn delete_subscription(system_dir: &Path, subscription_id: &str) -> Result<(
 /// Files that cannot be parsed are silently skipped so one corrupt record
 /// does not hide the rest of the library.
 pub fn list_subscriptions(system_dir: &Path) -> Result<Vec<Subscription>> {
-    let dir = webnovels_dir(system_dir);
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut subscriptions: Vec<Subscription> = fs::read_dir(&dir)
-        .map_err(VaultError::from)?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                return None;
-            }
-            let raw = fs::read_to_string(&path).ok()?;
-            serde_json::from_str(&raw).ok()
-        })
-        .collect();
-
-    subscriptions.sort_by_key(|subscription| subscription.created_at_unix);
-    Ok(subscriptions)
-}
-
-// ---------------------------------------------------------------------------
-// Host blocklist
-// ---------------------------------------------------------------------------
-
-/// Hosts that are never fetched. Built-in entries cover domains that are
-/// parked ad-landers or otherwise known to be unusable/unsafe.
-const BUILTIN_BLOCKED_HOSTS: [(&str, &str); 1] = [(
-    "novelive.com",
-    "Geparkte Domain — leitet nur auf einen Werbe-Lander um (Stand 07/2026).",
-)];
-
-/// One blocklist entry — a host plus an optional curator note.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlocklistEntry {
-    /// Blocked host name (subdomains are blocked too).
-    pub host: String,
-    /// Optional note explaining WHY the host is blocked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-    /// Built-in entries ship with the app and cannot be removed.
-    #[serde(default)]
-    pub builtin: bool,
-}
-
-/// File format: entries are either plain host strings (legacy) or
-/// `{host, note}` objects — both parse.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawBlocklistEntry {
-    Plain(String),
-    WithNote { host: String, note: Option<String> },
-}
-
-/// User-curated blocklist file (a JSON array of hosts or {host, note} objects).
-pub fn blocklist_file_path(system_dir: &Path) -> PathBuf {
-    system_dir.join("webnovel_blocklist.json")
-}
-
-/// Returns the merged blocklist: built-in entries plus the user's file.
-///
-/// The file is optional and errors are treated as an empty list — a broken
-/// blocklist must never disable the built-in protections.
-pub fn load_blocklist_entries(system_dir: &Path) -> Vec<BlocklistEntry> {
-    let mut entries: Vec<BlocklistEntry> = BUILTIN_BLOCKED_HOSTS
-        .iter()
-        .map(|(host, note)| BlocklistEntry {
-            host: host.to_string(),
-            note: Some(note.to_string()),
-            builtin: true,
-        })
-        .collect();
-    if let Ok(raw) = fs::read_to_string(blocklist_file_path(system_dir)) {
-        if let Ok(user_entries) = serde_json::from_str::<Vec<RawBlocklistEntry>>(&raw) {
-            for entry in user_entries {
-                let (host, note) = match entry {
-                    RawBlocklistEntry::Plain(host) => (host, None),
-                    RawBlocklistEntry::WithNote { host, note } => (host, note),
-                };
-                let host = host.trim().to_lowercase();
-                if !host.is_empty() && !entries.iter().any(|existing| existing.host == host) {
-                    entries.push(BlocklistEntry {
-                        host,
-                        note,
-                        builtin: false,
-                    });
-                }
-            }
-        }
-    }
-    entries
-}
-
-/// Persists the user-curated part of the blocklist (built-ins are skipped).
-pub fn save_user_blocklist(system_dir: &Path, entries: &[BlocklistEntry]) -> Result<()> {
-    let user_entries: Vec<&BlocklistEntry> = entries
-        .iter()
-        .filter(|entry| !entry.builtin && !entry.host.trim().is_empty())
-        .collect();
-    let json = serde_json::to_string_pretty(&user_entries)
-        .map_err(|e| VaultError::Serialization(format!("blocklist serialize error: {e}")))?;
-    fs::create_dir_all(system_dir).map_err(VaultError::from)?;
-    fs::write(blocklist_file_path(system_dir), json).map_err(VaultError::from)?;
-    Ok(())
-}
-
-/// Flat host list, for the actual blocking check.
-pub fn load_blocked_hosts(system_dir: &Path) -> Vec<String> {
-    load_blocklist_entries(system_dir)
-        .into_iter()
-        .map(|entry| entry.host)
-        .collect()
-}
-
-/// Checks a subscription URL against the blocklist.
-///
-/// Returns a user-facing German message when the URL's host (or a parent
-/// domain of it) is blocked.
-pub fn blocked_reason(system_dir: &Path, url: &str) -> Option<String> {
-    let host = crate::api::novel::host_of(url)?;
-    for blocked in load_blocked_hosts(system_dir) {
-        if host == blocked || host.ends_with(&format!(".{blocked}")) {
-            return Some(format!(
-                "Die Seite „{host}“ steht auf der Blockliste \
-                 (Datei: .fero/webnovel_blocklist.json im Vault)."
-            ));
-        }
-    }
-    None
-}
-
-// ---------------------------------------------------------------------------
-// Internals
-// ---------------------------------------------------------------------------
-
-fn default_true() -> bool {
-    true
-}
-
-/// Returns the current UNIX timestamp in seconds.
-pub fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
-/// FNV-1a 64-bit hash.
-///
-/// Duplicated from `core::progress` (where it is private) to avoid widening
-/// that module's API for a two-line function.
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = FNV_OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
+    subscription::list_subscriptions(system_dir, STORE)
 }
 
 // ---------------------------------------------------------------------------
@@ -514,112 +113,47 @@ mod tests {
         std::env::temp_dir().join(format!("webnovel-test-{label}-{}", std::process::id()))
     }
 
+    /// The store path must stay exactly where earlier versions wrote it —
+    /// a change here would orphan every existing subscription.
     #[test]
-    fn normalize_url_strips_fragment_and_trailing_slash() {
+    fn store_layout_is_stable() {
+        let dir = Path::new("/vault/.fero");
+        assert_eq!(webnovels_dir(dir), dir.join("webnovels"));
         assert_eq!(
-            normalize_url("https://example.com/novel/ "),
-            "https://example.com/novel"
+            subscription_file_path(dir, "0123456789abcdef"),
+            dir.join("webnovels/0123456789abcdef.json")
         );
-        assert_eq!(
-            normalize_url("https://example.com/novel#chapter-3"),
-            "https://example.com/novel"
-        );
-        assert_eq!(
-            subscription_id("https://example.com/novel/"),
-            subscription_id("https://example.com/novel#toc")
-        );
+        assert_eq!(webnovel_trash_dir(dir), dir.join("webnovels/trash"));
     }
 
     #[test]
-    fn subscription_ids_are_validated() {
-        assert!(is_valid_subscription_id(&subscription_id(
-            "https://example.com/novel"
-        )));
-        assert!(!is_valid_subscription_id("../../escape"));
-        assert!(!is_valid_subscription_id("ABCDEF0123456789"));
-        assert!(!is_valid_subscription_id("0123456789abcde"));
-    }
-
-    #[test]
-    fn store_rejects_traversal_ids() {
-        let dir = temp_system_dir("traversal");
-        assert!(load_subscription(&dir, "../../etc/passwd").is_err());
-        assert!(delete_subscription(&dir, "../../etc/passwd").is_err());
-        assert!(purge_trashed_subscription(&dir, "..").is_err());
-    }
-
-    #[test]
-    fn save_load_delete_roundtrip() {
-        let dir = temp_system_dir("crud");
-        let mut subscription =
-            Subscription::new("https://example.com/fiction/123", "royalroad", "Test Novel");
-        subscription.known_chapters.push(KnownChapter {
-            index: 1,
-            title: "Chapter 1".to_string(),
-            url: "https://example.com/fiction/123/chapter/1".to_string(),
-            downloaded_at_unix: Some(1_700_000_000),
-        });
+    fn save_load_trash_restore_roundtrip() {
+        let dir = temp_system_dir("roundtrip");
+        let subscription =
+            Subscription::new("https://example.com/fiction/7", "royalroad", "Test Novel");
 
         save_subscription(&dir, &subscription).expect("save should succeed");
-        let loaded = load_subscription(&dir, &subscription.id)
-            .expect("load should succeed")
-            .expect("subscription should exist");
-        assert_eq!(loaded.title, "Test Novel");
-        assert_eq!(loaded.known_chapters.len(), 1);
-        assert_eq!(loaded.downloaded_count(), 1);
-        assert!(loaded.enabled);
+        assert_eq!(
+            list_subscriptions(&dir).expect("list should succeed").len(),
+            1
+        );
 
-        let all = list_subscriptions(&dir).expect("list should succeed");
-        assert_eq!(all.len(), 1);
+        trash_subscription(&dir, &subscription.id).expect("trash should succeed");
+        assert!(list_subscriptions(&dir)
+            .expect("list should succeed")
+            .is_empty());
+        assert_eq!(
+            list_trashed_subscriptions(&dir)
+                .expect("trash list should succeed")
+                .len(),
+            1
+        );
 
-        delete_subscription(&dir, &subscription.id).expect("delete should succeed");
-        assert!(load_subscription(&dir, &subscription.id)
-            .expect("load should succeed")
-            .is_none());
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn blocklist_merges_builtin_and_user_entries() {
-        let dir = temp_system_dir("blocklist");
-        std::fs::create_dir_all(&dir).expect("dir should create");
-        std::fs::write(
-            blocklist_file_path(&dir),
-            r#"["evil-novels.example", " Mixed.Case.example "]"#,
-        )
-        .expect("write should succeed");
-
-        assert!(blocked_reason(&dir, "https://novelive.com/x").is_some());
-        assert!(blocked_reason(&dir, "https://www.evil-novels.example/novel/1").is_some());
-        assert!(blocked_reason(&dir, "https://mixed.case.example/n").is_some());
-        assert!(blocked_reason(&dir, "https://www.royalroad.com/fiction/1").is_none());
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn broken_blocklist_keeps_builtin_protection() {
-        let dir = temp_system_dir("blocklist-broken");
-        std::fs::create_dir_all(&dir).expect("dir should create");
-        std::fs::write(blocklist_file_path(&dir), "{ not json").expect("write should succeed");
-        assert!(blocked_reason(&dir, "https://novelive.com/x").is_some());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn list_skips_corrupt_files() {
-        let dir = temp_system_dir("corrupt");
-        let store = webnovels_dir(&dir);
-        std::fs::create_dir_all(&store).expect("dir should create");
-        std::fs::write(store.join("broken.json"), "{ not json").expect("write should succeed");
-
-        let subscription = Subscription::new("https://example.com/fiction/9", "royalroad", "Valid");
-        save_subscription(&dir, &subscription).expect("save should succeed");
-
-        let all = list_subscriptions(&dir).expect("list should succeed");
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].title, "Valid");
+        restore_subscription(&dir, &subscription.id).expect("restore should succeed");
+        assert_eq!(
+            list_subscriptions(&dir).expect("list should succeed").len(),
+            1
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

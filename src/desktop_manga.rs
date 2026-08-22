@@ -1,0 +1,1426 @@
+//! # desktop_manga
+//!
+//! HTTP handlers and the download pipeline for manga subscriptions.
+//!
+//! ## Relationship to the webnovel engine
+//! The endpoints mirror `/api/webnovel/*` one for one, so the frontend can
+//! reuse its subscription UI wholesale.  What differs is the payload: a
+//! chapter is a list of page images, and the artifact is one CBZ per chapter
+//! instead of a rebuilt EPUB.
+//!
+//! ## Why there is no chapter cache
+//! Webnovels cache chapter XHTML because the complete EPUB is rebuilt from
+//! scratch on every run.  A CBZ is final once written — the chapter it holds
+//! never changes — so the archive itself *is* the cache, and a failed chapter
+//! simply stays undownloaded and is retried on the next check.
+//!
+//! ## Vault layout
+//! ```text
+//! <Vault>/Manga/<Serie>/
+//!   cover.jpg
+//!   Serie - Kapitel 0001.cbz
+//!   Serie - Kapitel 0001.cbz.fero.yaml
+//! ```
+//!
+//! ## Dependencies:
+//! - `api::manga` – source adapters
+//! - `core::cbz` – archive writer
+//! - `core::manga` – subscription store
+//! - `desktop` – shared vault/sidecar/browser-window helpers
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
+
+use serde::{Deserialize, Serialize};
+
+use crate::api::manga::{self, MangaChapterRef, MangaInfo};
+use crate::api::novel::{detect_image_media_type, PoliteClient};
+use crate::core::cbz::{write_cbz, CbzMeta, CbzPage};
+use crate::core::manga::{
+    blocked_reason, delete_subscription, list_subscriptions, list_trashed_subscriptions,
+    load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
+    save_subscription, subscription_id, trash_subscription, unix_now, KnownChapter, Subscription,
+};
+use crate::core::properties::render_sidecar_yaml;
+use crate::core::vault::{RelativePath, Vault};
+use crate::desktop::{
+    debug_log, extract_query_value, resolve_vault_root, safe_folder_segment, sanitize_path_segment,
+    write_sidecar_preview,
+};
+use crate::error::{Result, VaultError};
+use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
+
+// ---------------------------------------------------------------------------
+// Job registry
+// ---------------------------------------------------------------------------
+
+/// Registry of running/finished manga check jobs, keyed by job id.
+static MANGA_JOBS: LazyLock<Mutex<HashMap<String, MangaJobStatus>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Guards against overlapping check runs.
+///
+/// Separate from the webnovel flag on purpose: the two engines touch different
+/// hosts and different vault folders, so a manga check must not be blocked by
+/// a novel check that happens to be running.
+static MANGA_CHECK_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Monotonic part of generated job ids.
+static MANGA_JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// How long a finished job stays pollable before it is dropped.
+const MANGA_JOB_RETENTION_SECS: u64 = 10 * 60;
+
+/// How many chapters may fail back to back before the run aborts.
+const MAX_CONSECUTIVE_CHAPTER_FAILURES: usize = 5;
+/// Largest accepted page image; guards against a mislabelled huge download.
+const MAX_PAGE_BYTES: usize = 20 * 1024 * 1024;
+/// Cover file names probed inside a series folder, in preference order.
+const MANGA_COVER_NAMES: [&str; 4] = ["cover.jpg", "cover.png", "cover.webp", "cover.gif"];
+
+/// Progress snapshot of one check job, polled by the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MangaJobStatus {
+    /// `running`, `done`, or `failed`.
+    state: String,
+    /// Title of the subscription currently being processed.
+    manga_title: String,
+    /// 1-based position of the chapter currently being fetched.
+    current_chapter: usize,
+    /// Chapters queued for download in the current subscription.
+    total_chapters: usize,
+    /// Pages fetched within the current chapter.
+    ///
+    /// A manga chapter is dozens of requests; without this the UI would sit on
+    /// an unmoving bar for minutes on a long chapter.
+    current_page: usize,
+    /// Pages in the current chapter, once known.
+    total_pages: usize,
+    /// Chapters completed so far across the whole job.
+    downloaded: usize,
+    /// Final summary or error message once the job is terminal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    /// When the job reached a terminal state — drives registry cleanup.
+    #[serde(skip)]
+    finished_at_unix: Option<u64>,
+}
+
+impl MangaJobStatus {
+    fn running() -> Self {
+        Self {
+            state: "running".to_string(),
+            manga_title: String::new(),
+            current_chapter: 0,
+            total_chapters: 0,
+            current_page: 0,
+            total_pages: 0,
+            downloaded: 0,
+            message: None,
+            finished_at_unix: None,
+        }
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.state != "running"
+    }
+}
+
+/// Applies a mutation to a job's status under the registry lock.
+fn update_job(job_id: &str, apply: impl FnOnce(&mut MangaJobStatus)) {
+    if let Ok(mut jobs) = MANGA_JOBS.lock() {
+        if let Some(status) = jobs.get_mut(job_id) {
+            apply(status);
+            if status.is_terminal() && status.finished_at_unix.is_none() {
+                status.finished_at_unix = Some(unix_now());
+            }
+        }
+    }
+}
+
+/// Drops finished jobs the frontend can no longer be waiting for.
+fn prune_jobs(jobs: &mut HashMap<String, MangaJobStatus>) {
+    let now = unix_now();
+    jobs.retain(|_, status| match status.finished_at_unix {
+        Some(finished) => now.saturating_sub(finished) < MANGA_JOB_RETENTION_SECS,
+        None => true,
+    });
+}
+
+/// Clears the "check running" flag when a worker thread ends — even on panic,
+/// so a crashed job can never wedge future checks.
+struct CheckActiveGuard;
+
+impl Drop for CheckActiveGuard {
+    fn drop(&mut self) {
+        MANGA_CHECK_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared response shapes
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub(crate) struct MangaSimpleResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl MangaSimpleResponse {
+    fn ok() -> Self {
+        Self {
+            ok: true,
+            error: None,
+        }
+    }
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(message.into()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MangaSubscriptionSummary {
+    id: String,
+    url: String,
+    source: String,
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    genres: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anilist_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rating_external: Option<f32>,
+    /// Vault-relative path of the cached cover image, when one exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cover_path: Option<String>,
+    completed: bool,
+    hiatus: bool,
+    enabled: bool,
+    known_chapters: usize,
+    downloaded_chapters: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_check_unix: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+}
+
+impl MangaSubscriptionSummary {
+    fn from_subscription(subscription: &Subscription, vault: &Vault) -> Self {
+        let cover_path =
+            manga_cover_path(&manga_folder(vault, subscription)).and_then(|absolute| {
+                vault
+                    .relative_from_absolute(&absolute)
+                    .ok()
+                    .map(|relative| relative.to_string())
+            });
+        Self {
+            id: subscription.id.clone(),
+            url: subscription.url.clone(),
+            source: subscription.source.clone(),
+            title: subscription.title.clone(),
+            author: subscription.author.clone(),
+            artist: subscription.artist.clone(),
+            description: subscription.description.clone(),
+            genres: subscription.genres.clone(),
+            tags: subscription.tags.clone(),
+            anilist_url: subscription.anilist_url.clone(),
+            rating_external: subscription.rating_external,
+            cover_path,
+            completed: subscription.completed,
+            hiatus: subscription.hiatus,
+            enabled: subscription.enabled,
+            known_chapters: subscription.known_chapters.len(),
+            downloaded_chapters: subscription.downloaded_count(),
+            last_check_unix: subscription.last_check_unix,
+            last_error: subscription.last_error.clone(),
+        }
+    }
+}
+
+/// Resolves the active vault or produces a user-facing German error message.
+fn resolve_manga_vault(root_override: Option<&str>) -> std::result::Result<Vault, String> {
+    let root = match resolve_vault_root(root_override) {
+        Ok(Some(root)) => root,
+        Ok(None) => return Err("Kein Vault geöffnet.".to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
+    Vault::new(root).map_err(|error| error.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/manga/list
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub(crate) struct MangaListResponse {
+    subscriptions: Vec<MangaSubscriptionSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Lists all manga subscriptions of the active vault.
+pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
+    let root_override = query.and_then(|q| extract_query_value(q, "root"));
+    let vault = match resolve_manga_vault(root_override.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => {
+            return MangaListResponse {
+                subscriptions: Vec::new(),
+                error: Some(message),
+            }
+        }
+    };
+
+    match list_subscriptions(&vault.system_dir()) {
+        Ok(subscriptions) => MangaListResponse {
+            subscriptions: subscriptions
+                .iter()
+                .map(|subscription| {
+                    MangaSubscriptionSummary::from_subscription(subscription, &vault)
+                })
+                .collect(),
+            error: None,
+        },
+        Err(error) => MangaListResponse {
+            subscriptions: Vec::new(),
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/manga/subscribe
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct SubscribeRequest {
+    url: String,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MangaSubscribeResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subscription: Option<MangaSubscriptionSummary>,
+    /// True when the URL was already subscribed and no new record was created.
+    already_subscribed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl MangaSubscribeResponse {
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            subscription: None,
+            already_subscribed: false,
+            error: Some(message.into()),
+        }
+    }
+}
+
+/// Subscribes to a manga series after verifying the URL can actually be read.
+pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
+    let req: SubscribeRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return MangaSubscribeResponse::error(format!("Invalid request: {error}")),
+    };
+
+    let vault = match resolve_manga_vault(req.root.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => return MangaSubscribeResponse::error(message),
+    };
+
+    let url = normalize_url(&req.url);
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return MangaSubscribeResponse::error("Bitte eine vollständige URL angeben.");
+    }
+    if let Some(reason) = blocked_reason(&vault.system_dir(), &url) {
+        return MangaSubscribeResponse::error(reason);
+    }
+
+    // Re-subscribing an existing URL returns the current record unchanged.
+    let id = subscription_id(&url);
+    match load_subscription(&vault.system_dir(), &id) {
+        Ok(Some(existing)) => {
+            return MangaSubscribeResponse {
+                subscription: Some(MangaSubscriptionSummary::from_subscription(
+                    &existing, &vault,
+                )),
+                already_subscribed: true,
+                error: None,
+            }
+        }
+        Ok(None) => {}
+        Err(error) => return MangaSubscribeResponse::error(error.to_string()),
+    }
+
+    let source = match manga::require_source(&url) {
+        Ok(source) => source,
+        Err(error) => return MangaSubscribeResponse::error(error.to_string()),
+    };
+    let client = match PoliteClient::new() {
+        Ok(client) => client,
+        Err(error) => return MangaSubscribeResponse::error(error.to_string()),
+    };
+
+    debug_log(&format!("manga subscribe: {url} source={}", source.id()));
+    let info = match source.fetch_series_info(&client, &url) {
+        Ok(info) => {
+            debug_log(&format!(
+                "manga subscribe: OK — {} Kapitel",
+                info.chapters.len()
+            ));
+            info
+        }
+        Err(error) => {
+            debug_log(&format!("manga subscribe: FEHLER: {error}"));
+            return MangaSubscribeResponse::error(error.to_string());
+        }
+    };
+
+    let mut subscription = Subscription::new(url, source.id(), info.title.clone());
+    // Pin the folder now: the title may change upstream later, and two series
+    // can sanitize to the same segment.
+    subscription.folder_name = Some(unique_manga_folder_name(&vault, &subscription));
+    apply_series_info(&mut subscription, &info);
+    subscription.known_chapters = info
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(position, chapter)| known_chapter(position as u32 + 1, chapter))
+        .collect();
+
+    match save_subscription(&vault.system_dir(), &subscription) {
+        Ok(()) => MangaSubscribeResponse {
+            subscription: Some(MangaSubscriptionSummary::from_subscription(
+                &subscription,
+                &vault,
+            )),
+            already_subscribed: false,
+            error: None,
+        },
+        Err(error) => MangaSubscribeResponse::error(error.to_string()),
+    }
+}
+
+/// Builds a store record from an adapter's chapter reference.
+fn known_chapter(index: u32, chapter: &MangaChapterRef) -> KnownChapter {
+    KnownChapter {
+        index,
+        title: chapter.title.clone(),
+        url: chapter.url.clone(),
+        volume: chapter.volume.clone(),
+        page_count: None,
+        downloaded_at_unix: None,
+        placeholder: false,
+    }
+}
+
+/// Copies scraped series metadata into a subscription without overwriting
+/// anything the user (or an earlier, richer source) already filled in.
+fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo) {
+    if subscription.author.is_none() {
+        subscription.author = info.author.clone();
+    }
+    if subscription.artist.is_none() {
+        subscription.artist = info.artist.clone();
+    }
+    if subscription.description.is_none() {
+        subscription.description = info.description.clone();
+    }
+    if subscription.cover_url.is_none() {
+        subscription.cover_url = info.cover_url.clone();
+    }
+    if subscription.genres.is_empty() {
+        subscription.genres = info.genres.clone();
+    }
+    if subscription.tags.is_empty() {
+        subscription.tags = info.tags.clone();
+    }
+    if info.completed_hint == Some(true) {
+        subscription.completed = true;
+    }
+    // The adapter knows the reading direction (manga vs. manhwa/webtoon);
+    // it must reach every chapter archive, not just the first.
+    subscription.right_to_left = info.right_to_left;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/manga/unsubscribe · trash · restore · purge
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnsubscribeRequest {
+    id: String,
+    /// When false, the series' vault folder (CBZ files) is moved to `.trash`.
+    #[serde(default = "default_true")]
+    keep_files: bool,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Moves a subscription into the in-app trash, optionally with its files.
+pub(crate) fn build_unsubscribe_response(body: &[u8]) -> MangaSimpleResponse {
+    let req: UnsubscribeRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
+    };
+    let vault = match resolve_manga_vault(req.root.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => return MangaSimpleResponse::error(message),
+    };
+
+    let subscription = match trash_subscription(&vault.system_dir(), &req.id) {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return MangaSimpleResponse::error("Abo nicht gefunden."),
+        Err(error) => return MangaSimpleResponse::error(error.to_string()),
+    };
+
+    if !req.keep_files {
+        let series_dir = manga_folder(&vault, &subscription);
+        if series_dir.exists() {
+            let trash_target = manga_trash_folder(&vault, &subscription);
+            if let Some(parent) = trash_target.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            if trash_target.exists() {
+                fs::remove_dir_all(&trash_target).ok();
+            }
+            if let Err(error) = fs::rename(&series_dir, &trash_target) {
+                return MangaSimpleResponse::error(format!(
+                    "Dateien konnten nicht in den Papierkorb verschoben werden: {error}"
+                ));
+            }
+        }
+    }
+
+    MangaSimpleResponse::ok()
+}
+
+#[derive(Serialize)]
+pub(crate) struct MangaTrashResponse {
+    subscriptions: Vec<MangaSubscriptionSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Lists trashed manga subscriptions.
+pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
+    let root_override = query.and_then(|q| extract_query_value(q, "root"));
+    let vault = match resolve_manga_vault(root_override.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => {
+            return MangaTrashResponse {
+                subscriptions: Vec::new(),
+                error: Some(message),
+            }
+        }
+    };
+
+    match list_trashed_subscriptions(&vault.system_dir()) {
+        Ok(subscriptions) => MangaTrashResponse {
+            subscriptions: subscriptions
+                .iter()
+                .map(|subscription| {
+                    MangaSubscriptionSummary::from_subscription(subscription, &vault)
+                })
+                .collect(),
+            error: None,
+        },
+        Err(error) => MangaTrashResponse {
+            subscriptions: Vec::new(),
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+#[derive(Deserialize)]
+struct IdRequest {
+    id: String,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+/// Restores a trashed subscription (and its files, if they are in `.trash`).
+pub(crate) fn build_restore_response(body: &[u8]) -> MangaSimpleResponse {
+    let req: IdRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
+    };
+    let vault = match resolve_manga_vault(req.root.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => return MangaSimpleResponse::error(message),
+    };
+
+    let subscription = match restore_subscription(&vault.system_dir(), &req.id) {
+        Ok(subscription) => subscription,
+        Err(error) => return MangaSimpleResponse::error(error.to_string()),
+    };
+
+    // Bring the files back too, when the delete moved them aside.
+    let trash_target = manga_trash_folder(&vault, &subscription);
+    let series_dir = manga_folder(&vault, &subscription);
+    if trash_target.exists() && !series_dir.exists() {
+        if let Some(parent) = series_dir.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        fs::rename(&trash_target, &series_dir).ok();
+    }
+
+    MangaSimpleResponse::ok()
+}
+
+/// Permanently deletes a trashed subscription and its trashed files.
+pub(crate) fn build_purge_response(body: &[u8]) -> MangaSimpleResponse {
+    let req: IdRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
+    };
+    let vault = match resolve_manga_vault(req.root.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => return MangaSimpleResponse::error(message),
+    };
+
+    // Read the record before purging so its pinned folder name is known; the
+    // folder must never be derived from anything else at delete time.
+    let trashed = list_trashed_subscriptions(&vault.system_dir())
+        .unwrap_or_default()
+        .into_iter()
+        .find(|subscription| subscription.id == req.id);
+
+    if let Err(error) = purge_trashed_subscription(&vault.system_dir(), &req.id) {
+        return MangaSimpleResponse::error(error.to_string());
+    }
+    if let Some(subscription) = trashed {
+        let trash_target = manga_trash_folder(&vault, &subscription);
+        if trash_target.exists() {
+            fs::remove_dir_all(&trash_target).ok();
+        }
+    }
+    // Active record too, in case the id was never trashed.
+    delete_subscription(&vault.system_dir(), &req.id).ok();
+
+    MangaSimpleResponse::ok()
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/manga/update
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct UpdateRequest {
+    id: String,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    completed: Option<bool>,
+    #[serde(default)]
+    hiatus: Option<bool>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+/// Toggles the completed/hiatus/paused flags of a subscription.
+pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
+    let req: UpdateRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
+    };
+    let vault = match resolve_manga_vault(req.root.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => return MangaSimpleResponse::error(message),
+    };
+
+    let mut subscription = match load_subscription(&vault.system_dir(), &req.id) {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return MangaSimpleResponse::error("Abo nicht gefunden."),
+        Err(error) => return MangaSimpleResponse::error(error.to_string()),
+    };
+
+    if let Some(completed) = req.completed {
+        subscription.completed = completed;
+    }
+    if let Some(hiatus) = req.hiatus {
+        subscription.hiatus = hiatus;
+    }
+    if let Some(enabled) = req.enabled {
+        subscription.enabled = enabled;
+    }
+
+    match save_subscription(&vault.system_dir(), &subscription) {
+        Ok(()) => MangaSimpleResponse::ok(),
+        Err(error) => MangaSimpleResponse::error(error.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/manga/check · GET /api/manga/job
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRequest {
+    /// Check a single subscription; omitted = all enabled, unfinished ones.
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    root: Option<String>,
+    /// Per-host request delay in milliseconds (clamped to 500–5000).
+    #[serde(default)]
+    delay_ms: Option<u64>,
+    /// Cap on chapters downloaded per subscription in one run.
+    ///
+    /// Subscribing to a 3000-chapter series would otherwise start a download
+    /// that runs for days; the next check simply picks up where this stopped.
+    #[serde(default)]
+    max_chapters: Option<usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MangaCheckResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Options carried into the worker thread for one check run.
+struct CheckOptions {
+    only_id: Option<String>,
+    delay_ms: Option<u64>,
+    max_chapters: Option<usize>,
+}
+
+/// Starts a background check run and returns its job id.
+pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
+    let req: CheckRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => {
+            return MangaCheckResponse {
+                job_id: None,
+                error: Some(format!("Invalid request: {error}")),
+            }
+        }
+    };
+
+    let vault = match resolve_manga_vault(req.root.as_deref()) {
+        Ok(vault) => vault,
+        Err(message) => {
+            return MangaCheckResponse {
+                job_id: None,
+                error: Some(message),
+            }
+        }
+    };
+
+    if MANGA_CHECK_ACTIVE
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return MangaCheckResponse {
+            job_id: None,
+            error: Some("Eine Manga-Prüfung läuft bereits.".to_string()),
+        };
+    }
+
+    let job_id = format!(
+        "manga-{}-{}",
+        unix_now(),
+        MANGA_JOB_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    if let Ok(mut jobs) = MANGA_JOBS.lock() {
+        prune_jobs(&mut jobs);
+        jobs.insert(job_id.clone(), MangaJobStatus::running());
+    }
+
+    let options = CheckOptions {
+        only_id: req.id,
+        delay_ms: req.delay_ms,
+        max_chapters: req.max_chapters,
+    };
+    let thread_job_id = job_id.clone();
+    std::thread::spawn(move || {
+        let _active = CheckActiveGuard;
+        let outcome = run_check(&vault, &options, &thread_job_id);
+        update_job(&thread_job_id, |status| match &outcome {
+            Ok(message) => {
+                status.state = "done".to_string();
+                status.message = Some(message.clone());
+            }
+            Err(error) => {
+                status.state = "failed".to_string();
+                status.message = Some(error.to_string());
+            }
+        });
+    });
+
+    MangaCheckResponse {
+        job_id: Some(job_id),
+        error: None,
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct MangaJobResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<MangaJobStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Returns the progress of a check job; terminal jobs are handed out once.
+pub(crate) fn build_job_response(query: Option<&str>) -> MangaJobResponse {
+    let Some(job_id) = query.and_then(|q| extract_query_value(q, "job_id")) else {
+        return MangaJobResponse {
+            status: None,
+            error: Some("missing job_id".to_string()),
+        };
+    };
+
+    let Ok(mut jobs) = MANGA_JOBS.lock() else {
+        return MangaJobResponse {
+            status: None,
+            error: Some("job registry unavailable".to_string()),
+        };
+    };
+
+    match jobs.get(&job_id).cloned() {
+        Some(status) => {
+            if status.state != "running" {
+                jobs.remove(&job_id);
+            }
+            MangaJobResponse {
+                status: Some(status),
+                error: None,
+            }
+        }
+        None => MangaJobResponse {
+            status: None,
+            error: Some("Job nicht gefunden.".to_string()),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Check runner
+// ---------------------------------------------------------------------------
+
+/// Runs one check job over the selected subscriptions.
+///
+/// Per-subscription failures are recorded in that subscription's `last_error`
+/// and the run continues; only store failures abort the whole job.
+fn run_check(vault: &Vault, options: &CheckOptions, job_id: &str) -> Result<String> {
+    let system_dir = vault.system_dir();
+    let all = list_subscriptions(&system_dir)?;
+    let selected: Vec<Subscription> = match options.only_id.as_deref() {
+        Some(id) => all
+            .into_iter()
+            .filter(|subscription| subscription.id == id)
+            .collect(),
+        None => all
+            .into_iter()
+            .filter(|subscription| {
+                subscription.enabled && !subscription.completed && !subscription.hiatus
+            })
+            .collect(),
+    };
+
+    if selected.is_empty() {
+        return Ok("Keine passenden Abonnements.".to_string());
+    }
+
+    let client = match options.delay_ms {
+        Some(delay_ms) => PoliteClient::with_delay_ms(delay_ms)?,
+        None => PoliteClient::new()?,
+    };
+
+    let mut new_chapters = 0usize;
+    let mut failures = 0usize;
+
+    for mut subscription in selected {
+        update_job(job_id, |status| {
+            status.manga_title = subscription.title.clone();
+            status.current_chapter = 0;
+            status.total_chapters = 0;
+            status.current_page = 0;
+            status.total_pages = 0;
+        });
+
+        match check_one(vault, &client, &mut subscription, options, job_id) {
+            Ok(downloaded) => {
+                new_chapters += downloaded;
+                subscription.last_error = None;
+            }
+            Err(error) => {
+                failures += 1;
+                subscription.last_error = Some(error.to_string());
+            }
+        }
+        subscription.last_check_unix = Some(unix_now());
+        save_subscription(&system_dir, &subscription)?;
+    }
+
+    let mut message = format!("{new_chapters} neue Kapitel geladen.");
+    if failures > 0 {
+        message.push_str(&format!(" {failures} Abo(s) mit Fehlern."));
+    }
+    Ok(message)
+}
+
+/// Checks one subscription: refresh the chapter list, download what is missing.
+fn check_one(
+    vault: &Vault,
+    client: &PoliteClient,
+    subscription: &mut Subscription,
+    options: &CheckOptions,
+    job_id: &str,
+) -> Result<usize> {
+    if let Some(reason) = blocked_reason(&vault.system_dir(), &subscription.url) {
+        return Err(VaultError::ExternalApi(reason));
+    }
+    let source = manga::require_source(&subscription.url)?;
+    debug_log(&format!(
+        "manga check: '{}' source={}",
+        subscription.title,
+        source.id()
+    ));
+
+    let info = source.fetch_series_info(client, &subscription.url)?;
+    apply_series_info(subscription, &info);
+    enrich_from_anilist(subscription);
+
+    // Diff by normalized URL. Chapters that vanished upstream are kept —
+    // downloaded content is never dropped because of an upstream edit.
+    let known: HashSet<String> = subscription
+        .known_chapters
+        .iter()
+        .map(|chapter| normalize_url(&chapter.url))
+        .collect();
+    let mut next_index = subscription
+        .known_chapters
+        .iter()
+        .map(|chapter| chapter.index)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    for chapter in &info.chapters {
+        if !known.contains(&normalize_url(&chapter.url)) {
+            subscription
+                .known_chapters
+                .push(known_chapter(next_index, chapter));
+            next_index += 1;
+        }
+    }
+
+    let series_dir = manga_folder(vault, subscription);
+    fs::create_dir_all(&series_dir).map_err(VaultError::from)?;
+    ensure_cover(client, subscription, &series_dir);
+
+    let mut pending: Vec<usize> = subscription
+        .known_chapters
+        .iter()
+        .enumerate()
+        .filter(|(_, chapter)| chapter.needs_fetch())
+        .map(|(position, _)| position)
+        .collect();
+    if let Some(limit) = options.max_chapters {
+        pending.truncate(limit);
+    }
+    update_job(job_id, |status| {
+        status.total_chapters = pending.len();
+    });
+
+    let mut downloaded = 0usize;
+    let mut skipped = 0usize;
+    let mut consecutive_failures = 0usize;
+    let mut fetch_error: Option<VaultError> = None;
+
+    for (position, chapter_position) in pending.iter().enumerate() {
+        update_job(job_id, |status| {
+            status.current_chapter = position + 1;
+            status.current_page = 0;
+            status.total_pages = 0;
+        });
+
+        let chapter_ref = {
+            let chapter = &subscription.known_chapters[*chapter_position];
+            MangaChapterRef {
+                title: chapter.title.clone(),
+                url: chapter.url.clone(),
+                volume: chapter.volume.clone(),
+                number: manga::extract_chapter_number(&chapter.title)
+                    .or_else(|| manga::extract_chapter_number(&chapter.url)),
+            }
+        };
+
+        match download_chapter(
+            vault,
+            client,
+            source.as_ref(),
+            subscription,
+            &chapter_ref,
+            subscription.known_chapters[*chapter_position].index,
+            job_id,
+        ) {
+            Ok(page_count) => {
+                consecutive_failures = 0;
+                let chapter = &mut subscription.known_chapters[*chapter_position];
+                chapter.downloaded_at_unix = Some(unix_now());
+                chapter.placeholder = false;
+                chapter.page_count = Some(page_count);
+                downloaded += 1;
+                update_job(job_id, |status| status.downloaded += 1);
+                // Persist after every chapter so an aborted run resumes here.
+                save_subscription(&vault.system_dir(), subscription)?;
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                debug_log(&format!(
+                    "manga chapter {}/{}: FEHLER '{}' — {error}",
+                    position + 1,
+                    pending.len(),
+                    chapter_ref.title
+                ));
+                // Many failures in a row → the site is down or blocking; stop
+                // and keep what was fetched so the next run resumes.
+                if consecutive_failures >= MAX_CONSECUTIVE_CHAPTER_FAILURES {
+                    fetch_error = Some(error);
+                    break;
+                }
+                // A single bad chapter is left undownloaded rather than
+                // written as a broken archive; the next check retries it.
+                skipped += 1;
+            }
+        }
+    }
+
+    if skipped > 0 {
+        debug_log(&format!(
+            "manga check: '{}' — {skipped} Kapitel übersprungen (Wiederholung beim nächsten Check)",
+            subscription.title
+        ));
+    }
+    if let Some(error) = fetch_error {
+        return Err(error);
+    }
+    Ok(downloaded)
+}
+
+/// Downloads one chapter's pages and writes the CBZ. Returns the page count.
+fn download_chapter(
+    vault: &Vault,
+    client: &PoliteClient,
+    source: &dyn manga::MangaSource,
+    subscription: &Subscription,
+    chapter: &MangaChapterRef,
+    index: u32,
+    job_id: &str,
+) -> Result<u32> {
+    let pages = source.fetch_chapter_pages(client, chapter)?;
+    if pages.is_empty() {
+        return Err(VaultError::ExternalApi(format!(
+            "Kapitel ohne Seiten: {}",
+            chapter.url
+        )));
+    }
+    update_job(job_id, |status| status.total_pages = pages.len());
+
+    let mut images = Vec::with_capacity(pages.len());
+    for (position, page) in pages.iter().enumerate() {
+        update_job(job_id, |status| status.current_page = position + 1);
+
+        let bytes = client.get_image(&page.url, page.referer.as_deref())?;
+        if bytes.len() > MAX_PAGE_BYTES {
+            return Err(VaultError::ExternalApi(format!(
+                "Seite {} ist unerwartet groß ({} MB): {}",
+                position + 1,
+                bytes.len() / (1024 * 1024),
+                page.url
+            )));
+        }
+        // An HTML error page served instead of an image would otherwise end up
+        // in the archive as a corrupt "page".
+        let Some(media_type) = detect_image_media_type(&bytes) else {
+            return Err(VaultError::ExternalApi(format!(
+                "Seite {} ist kein gültiges Bild: {}",
+                position + 1,
+                page.url
+            )));
+        };
+        images.push(CbzPage {
+            media_type: media_type.to_string(),
+            bytes,
+        });
+    }
+
+    let series_dir = manga_folder(vault, subscription);
+    let file_name = chapter_file_name(subscription, chapter, index);
+    let meta = CbzMeta {
+        series: subscription.title.clone(),
+        title: Some(chapter.title.clone()),
+        number: chapter.number.clone(),
+        volume: chapter.volume.clone(),
+        summary: subscription.description.clone(),
+        writer: subscription.author.clone(),
+        penciller: subscription.artist.clone(),
+        genres: subscription.genres.clone(),
+        web: Some(chapter.url.clone()),
+        language: None,
+        right_to_left: subscription.right_to_left,
+    };
+    let page_count = images.len() as u32;
+    write_cbz(&series_dir.join(&file_name), &meta, &images)?;
+    write_manga_sidecar(vault, subscription, &file_name, chapter, index)?;
+    Ok(page_count)
+}
+
+/// Fills metadata gaps from an AniList manga lookup. Best effort.
+fn enrich_from_anilist(subscription: &mut Subscription) {
+    let has_gaps = subscription.description.is_none()
+        || subscription.genres.is_empty()
+        || subscription.cover_url.is_none();
+    if subscription.anilist_id.is_some() || !has_gaps {
+        return;
+    }
+    let anilist = crate::api::anilist::AniListClient::default();
+    let Ok(Some(manga)) = anilist.search_manga(&subscription.title) else {
+        return;
+    };
+    subscription.anilist_id = Some(manga.anilist_id);
+    subscription.anilist_url = manga.anilist_url.clone();
+    if subscription.description.is_none() {
+        subscription.description = manga.description.clone();
+    }
+    if subscription.genres.is_empty() {
+        subscription.genres = manga.genres.clone();
+    }
+    if subscription.tags.is_empty() {
+        subscription.tags = manga.tags.clone();
+    }
+    if subscription.cover_url.is_none() {
+        subscription.cover_url = manga.cover_url.clone();
+    }
+    if subscription.rating_external.is_none() {
+        // AniList scores are 0–100; the field holds a 0–5 rating.
+        subscription.rating_external = manga.average_score.map(|score| score / 20.0);
+    }
+}
+
+/// Downloads the series cover into the series folder if not present.
+///
+/// Non-fatal by design: a missing cover must never block chapter downloads.
+fn ensure_cover(client: &PoliteClient, subscription: &Subscription, series_dir: &Path) -> bool {
+    let Some(cover_url) = subscription.cover_url.as_deref() else {
+        return false;
+    };
+    if manga_cover_path(series_dir).is_some() {
+        return false;
+    }
+    let Ok(bytes) = client.get_image(cover_url, Some(&subscription.url)) else {
+        return false;
+    };
+    let Some(media_type) = detect_image_media_type(&bytes) else {
+        return false;
+    };
+    let file_name = match media_type {
+        "image/png" => "cover.png",
+        "image/webp" => "cover.webp",
+        "image/gif" => "cover.gif",
+        _ => "cover.jpg",
+    };
+    fs::write(series_dir.join(file_name), bytes).is_ok()
+}
+
+// ---------------------------------------------------------------------------
+// Vault layout
+// ---------------------------------------------------------------------------
+
+/// Returns the directory name for a subscription's files.
+///
+/// Prefers the name pinned at subscribe time; the result is always a single,
+/// safe segment — never empty, never `.`/`..` — so joining it can only descend
+/// one level.  Without that guarantee a series whose scraped title sanitizes
+/// to nothing would resolve to the parent directory, and a per-series delete
+/// would take the whole library with it.
+fn manga_folder_name(subscription: &Subscription) -> String {
+    if let Some(pinned) = subscription.folder_name.as_deref() {
+        let sanitized = sanitize_path_segment(pinned);
+        if !sanitized.is_empty() {
+            return sanitized;
+        }
+    }
+    safe_folder_segment(
+        &subscription.title,
+        &format!("manga_{}", subscription.id.trim()),
+    )
+}
+
+/// Picks a folder name that no other subscription already uses.
+fn unique_manga_folder_name(vault: &Vault, subscription: &Subscription) -> String {
+    let base = manga_folder_name(subscription);
+    let taken = list_subscriptions(&vault.system_dir())
+        .unwrap_or_default()
+        .iter()
+        .filter(|other| other.id != subscription.id)
+        .any(|other| manga_folder_name(other) == base);
+
+    if taken {
+        format!("{base} ({})", subscription.id)
+    } else {
+        base
+    }
+}
+
+/// Vault location of a series' files.
+fn manga_folder(vault: &Vault, subscription: &Subscription) -> PathBuf {
+    vault
+        .root()
+        .join(MediaType::Manga.folder_segment())
+        .join(manga_folder_name(subscription))
+}
+
+/// Trash location mirroring [`manga_folder`].
+fn manga_trash_folder(vault: &Vault, subscription: &Subscription) -> PathBuf {
+    vault
+        .root()
+        .join(".trash")
+        .join(MediaType::Manga.folder_segment())
+        .join(manga_folder_name(subscription))
+}
+
+/// Returns the existing cover file path inside a series folder, if any.
+fn manga_cover_path(series_dir: &Path) -> Option<PathBuf> {
+    MANGA_COVER_NAMES
+        .iter()
+        .map(|name| series_dir.join(name))
+        .find(|path| path.exists())
+}
+
+/// Builds the CBZ file name for a chapter.
+///
+/// The chapter number is zero-padded so a plain file listing sorts in reading
+/// order; decimals (`0010.5`) survive because half-chapters are common.  When
+/// the source exposes no number the ToC index stands in.
+fn chapter_file_name(subscription: &Subscription, chapter: &MangaChapterRef, index: u32) -> String {
+    let label = chapter
+        .number
+        .as_deref()
+        .and_then(pad_chapter_number)
+        .unwrap_or_else(|| format!("{index:04}"));
+    let safe_title = manga_folder_name(subscription);
+    sanitize_path_segment(&format!("{safe_title} - Kapitel {label}.cbz"))
+}
+
+/// Zero-pads the integer part of a chapter number to four digits.
+fn pad_chapter_number(number: &str) -> Option<String> {
+    let (whole, fraction) = match number.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (number, None),
+    };
+    let whole: u32 = whole.parse().ok()?;
+    Some(match fraction {
+        Some(fraction) if !fraction.is_empty() => format!("{whole:04}.{fraction}"),
+        _ => format!("{whole:04}"),
+    })
+}
+
+/// Writes the `.fero.yaml` sidecar next to a generated CBZ.
+///
+/// Only called when a CBZ is newly written: re-writing every sidecar on every
+/// check would mean thousands of file writes for a long-running series.
+fn write_manga_sidecar(
+    vault: &Vault,
+    subscription: &Subscription,
+    file_name: &str,
+    chapter: &MangaChapterRef,
+    index: u32,
+) -> Result<()> {
+    let safe_title = manga_folder_name(subscription);
+    let relative = RelativePath::new(
+        PathBuf::from(MediaType::Manga.folder_segment())
+            .join(&safe_title)
+            .join(file_name),
+    )?;
+
+    let entry_id = format!("{}-ch-{index:04}", subscription.id);
+    let mut entry = MediaEntry::new(&entry_id, MediaType::Manga, relative.clone(), file_name);
+    entry.source = PropertySource::Api;
+    entry.created_at_unix = unix_now();
+    entry.updated_at_unix = entry.created_at_unix;
+    entry.properties.title = Some(chapter.title.clone());
+    entry.properties.series_title = Some(subscription.title.clone());
+    entry.properties.author = subscription.author.clone();
+    entry.properties.description = subscription.description.clone();
+    entry.properties.genres = subscription.genres.clone();
+    entry.properties.tags = subscription.tags.clone();
+    entry.properties.anilist_id = subscription.anilist_id;
+    entry.properties.anilist_url = subscription.anilist_url.clone();
+    entry.properties.rating_external = subscription.rating_external;
+    entry.properties.notes = Some(format!("Quelle: {}", chapter.url));
+    entry.properties.status = Some(if subscription.completed {
+        MediaStatus::Completed
+    } else if subscription.hiatus {
+        MediaStatus::OnHold
+    } else {
+        MediaStatus::InLibrary
+    });
+    // Chapter numbers double as the episode range so list views can sort.
+    let chapter_number = chapter
+        .number
+        .as_deref()
+        .and_then(|number| {
+            number
+                .split('.')
+                .next()
+                .unwrap_or(number)
+                .parse::<u32>()
+                .ok()
+        })
+        .unwrap_or(index);
+    let clamped = chapter_number.min(u32::from(u16::MAX)) as u16;
+    entry.properties.episode_start = Some(clamped);
+    entry.properties.episode_end = Some(clamped);
+
+    if let Some(cover_path) = manga_cover_path(&manga_folder(vault, subscription)) {
+        if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
+            entry.properties.cover_path = RelativePath::new(
+                PathBuf::from(MediaType::Manga.folder_segment())
+                    .join(&safe_title)
+                    .join(cover_name),
+            )
+            .ok();
+        }
+    }
+
+    let yaml = render_sidecar_yaml(&entry)?;
+    write_sidecar_preview(vault, &relative, &yaml)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn subscription(title: &str) -> Subscription {
+        Subscription::new("https://example.com/manga/x", "mangatown", title)
+    }
+
+    #[test]
+    fn chapter_files_sort_in_reading_order() {
+        let subscription = subscription("Serie");
+        let name = |number: Option<&str>, index: u32| {
+            chapter_file_name(
+                &subscription,
+                &MangaChapterRef {
+                    title: "t".to_string(),
+                    url: "u".to_string(),
+                    volume: None,
+                    number: number.map(str::to_string),
+                },
+                index,
+            )
+        };
+
+        assert_eq!(name(Some("1"), 1), "Serie - Kapitel 0001.cbz");
+        assert_eq!(name(Some("10.5"), 11), "Serie - Kapitel 0010.5.cbz");
+        assert_eq!(name(Some("3862"), 9), "Serie - Kapitel 3862.cbz");
+        // No number from the source → the ToC index keeps files ordered.
+        assert_eq!(name(None, 7), "Serie - Kapitel 0007.cbz");
+
+        let mut names = vec![name(Some("10"), 1), name(Some("2"), 2), name(Some("1"), 3)];
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "Serie - Kapitel 0001.cbz",
+                "Serie - Kapitel 0002.cbz",
+                "Serie - Kapitel 0010.cbz",
+            ]
+        );
+    }
+
+    #[test]
+    fn folder_name_never_escapes_the_media_directory() {
+        // A scraped title is attacker-controlled input for a path segment.
+        for title in ["..", ".", "", "../../etc", "/absolute"] {
+            let mut record = subscription(title);
+            record.folder_name = Some(title.to_string());
+            let name = manga_folder_name(&record);
+            assert!(
+                !name.is_empty(),
+                "title {title:?} produced an empty segment"
+            );
+            assert!(name != "." && name != "..", "title {title:?} escaped");
+            assert!(!name.contains('/'), "title {title:?} kept a separator");
+        }
+    }
+
+    #[test]
+    fn trash_folder_mirrors_the_series_folder() {
+        let vault_root = std::env::temp_dir().join("manga-layout-test");
+        let vault = Vault::new(vault_root.clone()).expect("vault should construct");
+        let record = subscription("Serie");
+
+        let series = manga_folder(&vault, &record);
+        let trashed = manga_trash_folder(&vault, &record);
+        assert!(series.ends_with("Manga/Serie"));
+        assert!(trashed.ends_with(".trash/Manga/Serie"));
+    }
+
+    #[test]
+    fn pads_only_parseable_numbers() {
+        assert_eq!(pad_chapter_number("7").as_deref(), Some("0007"));
+        assert_eq!(pad_chapter_number("10.5").as_deref(), Some("0010.5"));
+        assert_eq!(pad_chapter_number("extra"), None);
+    }
+
+    #[test]
+    fn series_info_never_overwrites_existing_metadata() {
+        let mut record = subscription("Serie");
+        record.author = Some("Vorhanden".to_string());
+        record.genres = vec!["Drama".to_string()];
+
+        apply_series_info(
+            &mut record,
+            &MangaInfo {
+                author: Some("Neu".to_string()),
+                artist: Some("Zeichner".to_string()),
+                genres: vec!["Action".to_string()],
+                completed_hint: Some(true),
+                ..MangaInfo::default()
+            },
+        );
+
+        // Existing values win; empty ones get filled.
+        assert_eq!(record.author.as_deref(), Some("Vorhanden"));
+        assert_eq!(record.genres, vec!["Drama".to_string()]);
+        assert_eq!(record.artist.as_deref(), Some("Zeichner"));
+        assert!(record.completed);
+    }
+}

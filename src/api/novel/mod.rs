@@ -132,6 +132,13 @@ pub fn detect_source(url: &str) -> Box<dyn NovelSource> {
 const USER_AGENT: &str = "Fero/0.1 (personal library tool)";
 /// Default minimum spacing between two requests to the same host.
 const MIN_REQUEST_DELAY_MS: u64 = 1_500;
+/// Minimum spacing between two image requests to the same host.
+///
+/// Page images live on CDNs that browsers hit with a dozen parallel requests
+/// per page view; the pacing that protects a scraped HTML endpoint would make
+/// a single manga chapter take minutes.  This stays sequential and throttled,
+/// just at a cadence the CDN already expects.
+const IMAGE_REQUEST_DELAY_MS: u64 = 250;
 /// Lower bound for the configurable delay — anything faster risks IP bans.
 const MIN_ALLOWED_DELAY_MS: u64 = 500;
 /// Upper bound for the configurable delay.
@@ -212,6 +219,8 @@ pub struct PoliteClient {
     client: reqwest::blocking::Client,
     /// Minimum spacing between two requests to the same host.
     min_delay: Duration,
+    /// Minimum spacing between two image requests to the same host.
+    image_delay: Duration,
     /// Last request instant per host, for enforcing `min_delay`.
     last_request: Mutex<HashMap<String, Instant>>,
     /// When set, whitelisted hosts are fetched through the browser window
@@ -246,6 +255,9 @@ impl PoliteClient {
             min_delay: Duration::from_millis(
                 delay_ms.clamp(MIN_ALLOWED_DELAY_MS, MAX_ALLOWED_DELAY_MS),
             ),
+            // A user who slows the client down expects that to apply to images
+            // too, so the image delay never exceeds the page delay.
+            image_delay: Duration::from_millis(IMAGE_REQUEST_DELAY_MS.min(delay_ms)),
             last_request: Mutex::new(HashMap::new()),
             renderer: None,
         })
@@ -268,6 +280,19 @@ impl PoliteClient {
     /// # Errors
     /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_text(&self, url: &str) -> Result<(String, String)> {
+        self.get_text_with(url, &[])
+    }
+
+    /// Like [`Self::get_text`], with extra request headers.
+    ///
+    /// Used by adapters that need a site-specific header to see the real page
+    /// — FanFox hides most of its chapter list behind an `isAdult` cookie.
+    /// Headers are additive; a stored browser session still wins for `Cookie`
+    /// and `User-Agent` so a solved challenge is never overwritten.
+    ///
+    /// # Errors
+    /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
+    pub fn get_text_with(&self, url: &str, headers: &[(&str, &str)]) -> Result<(String, String)> {
         // Whitelisted hosts go through the browser window when a renderer is
         // attached — plain HTTP either can't pass Cloudflare (TLS-bound) or
         // never sees the JS-rendered content.
@@ -281,7 +306,7 @@ impl PoliteClient {
         let mut attempt = 0;
         loop {
             self.respect_delay(url);
-            match self.try_get(url) {
+            match self.try_get(url, headers) {
                 Ok(result) => return Ok(result),
                 Err(RequestFailure::Fatal(error)) => return Err(error),
                 Err(RequestFailure::Transient(error)) => {
@@ -302,10 +327,31 @@ impl PoliteClient {
     /// # Errors
     /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        self.fetch_bytes(url, None, self.min_delay)
+    }
+
+    /// Fetches a page image, optionally sending a `Referer` header.
+    ///
+    /// # Parameters
+    /// - `url` – Absolute image URL
+    /// - `referer` – Page the image is embedded in; some CDNs (Webtoons)
+    ///   answer `403` without it
+    ///
+    /// # Returns
+    /// - `Ok(Vec<u8>)` – Raw image bytes; the caller validates the format
+    ///
+    /// # Errors
+    /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
+    pub fn get_image(&self, url: &str, referer: Option<&str>) -> Result<Vec<u8>> {
+        self.fetch_bytes(url, referer, self.image_delay)
+    }
+
+    /// Shared retry loop behind [`Self::get_bytes`] and [`Self::get_image`].
+    fn fetch_bytes(&self, url: &str, referer: Option<&str>, delay: Duration) -> Result<Vec<u8>> {
         let mut attempt = 0;
         loop {
-            self.respect_delay(url);
-            match self.try_get_bytes(url) {
+            self.respect_delay_with(url, delay);
+            match self.try_get_bytes(url, referer) {
                 Ok(bytes) => return Ok(bytes),
                 Err(RequestFailure::Fatal(error)) => return Err(error),
                 Err(RequestFailure::Transient(error)) => {
@@ -319,8 +365,15 @@ impl PoliteClient {
         }
     }
 
-    fn try_get_bytes(&self, url: &str) -> std::result::Result<Vec<u8>, RequestFailure> {
+    fn try_get_bytes(
+        &self,
+        url: &str,
+        referer: Option<&str>,
+    ) -> std::result::Result<Vec<u8>, RequestFailure> {
         let mut request = self.client.get(url);
+        if let Some(referer) = referer {
+            request = request.header("Referer", referer);
+        }
         if let Some(session) = browser_session_for(url) {
             request = request
                 .header("Cookie", session.cookie_header)
@@ -350,8 +403,15 @@ impl PoliteClient {
         Ok(bytes.to_vec())
     }
 
-    fn try_get(&self, url: &str) -> std::result::Result<(String, String), RequestFailure> {
+    fn try_get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> std::result::Result<(String, String), RequestFailure> {
         let mut request = self.client.get(url);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         // A manually solved Cloudflare challenge leaves cookies + UA here;
         // sending them lets subsequent plain requests pass the check.
         if let Some(session) = browser_session_for(url) {
@@ -403,10 +463,14 @@ impl PoliteClient {
 
     /// Sleeps just long enough to honor the per-host minimum request spacing.
     fn respect_delay(&self, url: &str) {
+        self.respect_delay_with(url, self.min_delay);
+    }
+
+    /// Like [`Self::respect_delay`], with an explicit spacing.
+    fn respect_delay_with(&self, url: &str, min_delay: Duration) {
         let Some(host) = host_of(url) else {
             return;
         };
-        let min_delay = self.min_delay;
         let wait = {
             let Ok(mut map) = self.last_request.lock() else {
                 return; // Poisoned lock: skip the delay rather than aborting.
@@ -502,8 +566,9 @@ pub fn og_image(html: &Html) -> Option<String> {
 
 /// Detects an image's MIME type from its magic bytes.
 ///
-/// Returns `None` for anything that is not JPEG/PNG/WebP — e.g. an HTML error
-/// page served instead of an image — so callers can discard bad downloads.
+/// Returns `None` for anything that is not JPEG/PNG/WebP/GIF — e.g. an HTML
+/// error page served instead of an image — so callers can discard bad
+/// downloads.
 pub fn detect_image_media_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() < 12 {
         return None;
@@ -516,6 +581,11 @@ pub fn detect_image_media_type(bytes: &[u8]) -> Option<&'static str> {
     }
     if &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return Some("image/webp");
+    }
+    // Scanlation pages are occasionally GIF; both EPUB and CBZ readers handle
+    // it, so accepting it is better than discarding the download.
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
     }
     None
 }

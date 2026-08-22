@@ -227,6 +227,7 @@ const labels = {
   collections: "Sammlungen",
   playlists: "Wiedergabelisten",
   webnovels: "Webnovels",
+  mangas: "Mangas",
   settings: "Einstellungen",
   trash: "Papierkorb",
 };
@@ -535,6 +536,7 @@ async function openVault(path, name = "") {
   syncVaultHint();
   loadPlan();
   initWebnovels();
+  initMangas();
 }
 
 async function bootstrapVault() {
@@ -9166,3 +9168,483 @@ document.getElementById("webnovel-logout-btn")?.addEventListener("click", async 
 
 // Reflect the persisted login state on startup.
 refreshNovelUpdatesLoginStatus();
+
+// ---------------------------------------------------------------------------
+// Manga subscriptions
+// ---------------------------------------------------------------------------
+// Mirrors the webnovel tab: same endpoints, same card markup, same CSS. What
+// differs is the artifact (one CBZ per chapter) and the progress display,
+// which also reports pages — a single chapter is dozens of image requests.
+
+const mangaSettingsKey = "fero.mangaSettings";
+const mangaUrlInput = document.getElementById("manga-url-input");
+const mangaSubscribeBtn = document.getElementById("manga-subscribe-btn");
+const mangaCheckAllBtn = document.getElementById("manga-check-all-btn");
+const mangaFeedback = document.getElementById("manga-feedback");
+const mangaSourcesHint = document.getElementById("manga-sources-hint");
+const mangaJobProgress = document.getElementById("manga-job-progress");
+const mangaJobText = document.getElementById("manga-job-text");
+const mangaJobBar = document.getElementById("manga-job-bar");
+const mangaList = document.getElementById("manga-list");
+const mangaListEmpty = document.getElementById("manga-list-empty");
+const mangaFilters = document.getElementById("manga-filters");
+const mangaDelayInput = document.getElementById("manga-delay-input");
+const mangaMaxChapters = document.getElementById("manga-max-chapters");
+
+/// Sites with an adapter, shown so a rejected URL is not a surprise.
+const mangaSupportedSources =
+  "Unterstützt: mangatown.com · fanfox.net · webtoons.com · mangaread.org · manhuaplus.com · hentai20.io";
+
+let mangaSubscriptionsCache = [];
+let mangaTrashCache = [];
+let mangaActiveFilter = "all";
+let mangaCheckRunning = false;
+let mangaInitialized = false;
+
+function setMangaFeedback(message, isError = false) {
+  if (!mangaFeedback) return;
+  mangaFeedback.textContent = message ?? "";
+  mangaFeedback.classList.toggle("is-error", Boolean(isError));
+}
+
+function mangaRootQuery() {
+  const root = getVaultRoot();
+  return root ? `&root=${encodeURIComponent(root)}` : "";
+}
+
+function loadMangaSettings() {
+  const stored = loadStoredJson(mangaSettingsKey, {});
+  return {
+    delayMs: Number(stored.delayMs) || 1500,
+    maxChapters: Number(stored.maxChapters) || 50,
+  };
+}
+
+function saveMangaSettings() {
+  saveStoredJson(mangaSettingsKey, {
+    delayMs: Number(mangaDelayInput?.value) || 1500,
+    maxChapters: Number(mangaMaxChapters?.value) || 50,
+  });
+}
+
+async function refreshMangaList() {
+  if (!mangaList) return;
+  try {
+    const payload = await webnovelApi(`/api/manga/list?_=${Date.now()}${mangaRootQuery()}`);
+    if (payload.error) {
+      setMangaFeedback(payload.error, true);
+      return;
+    }
+    mangaSubscriptionsCache = payload.subscriptions ?? [];
+    if (mangaActiveFilter === "trash") {
+      await refreshMangaTrash();
+    } else {
+      renderMangaList(applyMangaFilter(mangaSubscriptionsCache));
+    }
+  } catch (error) {
+    setMangaFeedback(`Abos konnten nicht geladen werden: ${error.message}`, true);
+  }
+}
+
+async function refreshMangaTrash() {
+  try {
+    const payload = await webnovelApi(`/api/manga/trash?_=${Date.now()}${mangaRootQuery()}`);
+    mangaTrashCache = payload.subscriptions ?? [];
+    renderMangaList(mangaTrashCache, true);
+  } catch (error) {
+    setMangaFeedback(`Papierkorb konnte nicht geladen werden: ${error.message}`, true);
+  }
+}
+
+function applyMangaFilter(subscriptions) {
+  switch (mangaActiveFilter) {
+    case "ongoing":
+      return subscriptions.filter((s) => !s.completed && !s.hiatus && s.enabled);
+    case "completed":
+      return subscriptions.filter((s) => s.completed);
+    case "paused":
+      return subscriptions.filter((s) => !s.enabled);
+    case "error":
+      return subscriptions.filter((s) => Boolean(s.lastError));
+    case "new":
+      return subscriptions.filter(
+        (s) => (s.knownChapters ?? 0) - (s.downloadedChapters ?? 0) > 0,
+      );
+    default:
+      return subscriptions;
+  }
+}
+
+function mangaCoverUrl(subscription) {
+  if (!subscription.coverPath) return null;
+  const root = getVaultRoot();
+  return `/api/media-file?path=${encodeURIComponent(subscription.coverPath)}${
+    root ? `&root=${encodeURIComponent(root)}` : ""
+  }`;
+}
+
+function renderMangaList(subscriptions, isTrash = false) {
+  if (!mangaList) return;
+  clearNode(mangaList);
+  if (mangaListEmpty) {
+    mangaListEmpty.hidden = subscriptions.length > 0;
+    mangaListEmpty.textContent = isTrash
+      ? "Papierkorb ist leer."
+      : mangaSubscriptionsCache.length
+        ? "Keine Abos für diesen Filter."
+        : "Noch keine Abos vorhanden.";
+  }
+
+  subscriptions.forEach((subscription) => {
+    const card = document.createElement("article");
+    card.className = "webnovel-card";
+
+    const coverUrl = mangaCoverUrl(subscription);
+    if (coverUrl) {
+      const cover = document.createElement("img");
+      cover.className = "webnovel-card-cover";
+      cover.loading = "lazy";
+      cover.alt = "";
+      cover.src = coverUrl;
+      card.appendChild(cover);
+    }
+
+    const cardBody = document.createElement("div");
+    cardBody.className = "webnovel-card-body";
+
+    const head = document.createElement("div");
+    head.className = "webnovel-card-head";
+    const title = document.createElement("span");
+    title.className = "webnovel-card-title";
+    title.textContent = subscription.title || subscription.url;
+    head.appendChild(title);
+
+    const badges = document.createElement("span");
+    const sourceBadge = document.createElement("span");
+    sourceBadge.className = "webnovel-badge";
+    sourceBadge.textContent = subscription.source;
+    badges.appendChild(sourceBadge);
+
+    const pending = (subscription.knownChapters ?? 0) - (subscription.downloadedChapters ?? 0);
+    if (pending > 0) {
+      const newBadge = document.createElement("span");
+      newBadge.className = "webnovel-badge is-new";
+      newBadge.textContent = `${pending} neu`;
+      badges.appendChild(newBadge);
+    }
+    if (subscription.completed) {
+      const doneBadge = document.createElement("span");
+      doneBadge.className = "webnovel-badge is-completed";
+      doneBadge.textContent = "abgeschlossen";
+      badges.appendChild(doneBadge);
+    }
+    if (subscription.hiatus) {
+      const hiatusBadge = document.createElement("span");
+      hiatusBadge.className = "webnovel-badge is-hiatus";
+      hiatusBadge.textContent = "Hiatus";
+      badges.appendChild(hiatusBadge);
+    }
+    if (!subscription.enabled) {
+      const pausedBadge = document.createElement("span");
+      pausedBadge.className = "webnovel-badge is-paused";
+      pausedBadge.textContent = "pausiert";
+      badges.appendChild(pausedBadge);
+    }
+    if (subscription.lastError) {
+      const errorBadge = document.createElement("span");
+      errorBadge.className = "webnovel-badge is-error";
+      errorBadge.textContent = "Fehler";
+      errorBadge.title = subscription.lastError;
+      badges.appendChild(errorBadge);
+    }
+    head.appendChild(badges);
+    cardBody.appendChild(head);
+
+    const meta = document.createElement("p");
+    meta.className = "webnovel-card-meta";
+    const authorPart = subscription.author ? `${subscription.author} · ` : "";
+    meta.textContent =
+      `${authorPart}${subscription.downloadedChapters ?? 0}/${subscription.knownChapters ?? 0} Kapitel · ` +
+      `zuletzt geprüft: ${formatWebnovelTimestamp(subscription.lastCheckUnix)}`;
+    cardBody.appendChild(meta);
+    card.appendChild(cardBody);
+
+    card.classList.add("is-clickable");
+    card.addEventListener("click", () => openMangaDetail(subscription, isTrash));
+    mangaList.appendChild(card);
+  });
+}
+
+function openMangaDetail(subscription, isTrash = false) {
+  const overlay = document.getElementById("manga-detail");
+  if (!overlay) return;
+
+  const cover = document.getElementById("manga-detail-cover");
+  const coverUrl = mangaCoverUrl(subscription);
+  if (cover) {
+    cover.hidden = !coverUrl;
+    if (coverUrl) cover.src = coverUrl;
+  }
+  document.getElementById("manga-detail-title").textContent =
+    subscription.title || subscription.url;
+
+  const authorParts = [subscription.author, subscription.artist].filter(Boolean);
+  document.getElementById("manga-detail-author").textContent = authorParts.length
+    ? authorParts.join(" · ")
+    : "";
+  document.getElementById("manga-detail-description").textContent =
+    subscription.description || "Keine Beschreibung vorhanden.";
+  document.getElementById("manga-detail-genres").textContent = (subscription.genres ?? []).join(
+    ", ",
+  );
+  document.getElementById("manga-detail-chapters").textContent =
+    `${subscription.downloadedChapters ?? 0} von ${subscription.knownChapters ?? 0} Kapiteln geladen`;
+
+  const errorEl = document.getElementById("manga-detail-error");
+  errorEl.hidden = !subscription.lastError;
+  errorEl.textContent = subscription.lastError ?? "";
+
+  const links = document.getElementById("manga-detail-links");
+  clearNode(links);
+  [
+    ["Quelle öffnen", subscription.url],
+    ["AniList", subscription.anilistUrl],
+  ].forEach(([label, url]) => {
+    if (!url) return;
+    const button = document.createElement("button");
+    button.className = "action-button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      fetch(`/api/open-url?url=${encodeURIComponent(url)}`).catch(() => {});
+    });
+    links.appendChild(button);
+  });
+
+  const actions = document.getElementById("manga-detail-actions");
+  clearNode(actions);
+  const addAction = (label, handler, className = "action-button") => {
+    const button = document.createElement("button");
+    button.className = className;
+    button.textContent = label;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await handler();
+      } finally {
+        button.disabled = false;
+      }
+    });
+    actions.appendChild(button);
+  };
+
+  if (isTrash) {
+    addAction("Wiederherstellen", async () => {
+      await mangaPost("/api/manga/restore", { id: subscription.id });
+      overlay.hidden = true;
+      await refreshMangaList();
+    });
+    addAction(
+      "Endgültig löschen",
+      async () => {
+        if (!confirm(`„${subscription.title}“ endgültig löschen? Dateien werden entfernt.`)) return;
+        await mangaPost("/api/manga/purge", { id: subscription.id });
+        overlay.hidden = true;
+        await refreshMangaList();
+      },
+      "action-button danger",
+    );
+  } else {
+    addAction("Jetzt prüfen", async () => {
+      overlay.hidden = true;
+      await startMangaCheck(subscription.id);
+    });
+    addAction(subscription.enabled ? "Pausieren" : "Fortsetzen", async () => {
+      await mangaPost("/api/manga/update", {
+        id: subscription.id,
+        enabled: !subscription.enabled,
+      });
+      overlay.hidden = true;
+      await refreshMangaList();
+    });
+    addAction(subscription.completed ? "Als laufend markieren" : "Als abgeschlossen markieren",
+      async () => {
+        await mangaPost("/api/manga/update", {
+          id: subscription.id,
+          completed: !subscription.completed,
+        });
+        overlay.hidden = true;
+        await refreshMangaList();
+      });
+    addAction(
+      "In den Papierkorb",
+      async () => {
+        const keepFiles = confirm(
+          `„${subscription.title}“ in den Papierkorb.\n\n` +
+            "OK = Dateien behalten · Abbrechen = Dateien ebenfalls in den Papierkorb",
+        );
+        await mangaPost("/api/manga/unsubscribe", {
+          id: subscription.id,
+          keepFiles,
+        });
+        overlay.hidden = true;
+        await refreshMangaList();
+      },
+      "action-button danger",
+    );
+  }
+
+  overlay.hidden = false;
+}
+
+async function mangaPost(path, payload) {
+  return webnovelApi(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, root: getVaultRoot() || undefined }),
+  });
+}
+
+async function subscribeManga() {
+  const url = (mangaUrlInput?.value ?? "").trim();
+  if (!url) {
+    setMangaFeedback("Bitte eine Manga-URL eingeben.", true);
+    return;
+  }
+  setMangaFeedback("Serie wird gelesen …");
+  if (mangaSubscribeBtn) mangaSubscribeBtn.disabled = true;
+  try {
+    const payload = await mangaPost("/api/manga/subscribe", { url });
+    if (payload.error) {
+      setMangaFeedback(payload.error, true);
+      return;
+    }
+    if (mangaUrlInput) mangaUrlInput.value = "";
+    setMangaFeedback(
+      payload.alreadySubscribed
+        ? `„${payload.subscription?.title}“ ist bereits abonniert.`
+        : `„${payload.subscription?.title}“ abonniert — ${payload.subscription?.knownChapters ?? 0} Kapitel gefunden.`,
+    );
+    await refreshMangaList();
+  } catch (error) {
+    setMangaFeedback(`Abonnieren fehlgeschlagen: ${error.message}`, true);
+  } finally {
+    if (mangaSubscribeBtn) mangaSubscribeBtn.disabled = false;
+  }
+}
+
+async function startMangaCheck(onlyId = null) {
+  if (mangaCheckRunning) {
+    setMangaFeedback("Eine Prüfung läuft bereits.", true);
+    return;
+  }
+  const settings = loadMangaSettings();
+  try {
+    mangaCheckRunning = true;
+    if (mangaCheckAllBtn) mangaCheckAllBtn.disabled = true;
+    const payload = await mangaPost("/api/manga/check", {
+      id: onlyId ?? undefined,
+      delayMs: settings.delayMs,
+      maxChapters: settings.maxChapters,
+    });
+    if (payload.error) {
+      setMangaFeedback(payload.error, true);
+      return;
+    }
+    setMangaFeedback("Prüfung gestartet …");
+    await pollMangaJob(payload.jobId);
+  } catch (error) {
+    setMangaFeedback(`Prüfung fehlgeschlagen: ${error.message}`, true);
+  } finally {
+    mangaCheckRunning = false;
+    if (mangaCheckAllBtn) mangaCheckAllBtn.disabled = false;
+    if (mangaJobProgress) mangaJobProgress.hidden = true;
+    await refreshMangaList();
+  }
+}
+
+async function pollMangaJob(jobId) {
+  if (!jobId) return;
+  if (mangaJobProgress) mangaJobProgress.hidden = false;
+
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    let payload;
+    try {
+      payload = await webnovelApi(`/api/manga/job?job_id=${encodeURIComponent(jobId)}`);
+    } catch (error) {
+      setMangaFeedback(`Fortschritt nicht abrufbar: ${error.message}`, true);
+      return;
+    }
+    const status = payload.status;
+    if (!status) return;
+
+    if (mangaJobText) {
+      const chapterPart = status.totalChapters
+        ? `Kapitel ${status.currentChapter}/${status.totalChapters}`
+        : "wird vorbereitet";
+      const pagePart = status.totalPages
+        ? ` · Seite ${status.currentPage}/${status.totalPages}`
+        : "";
+      mangaJobText.textContent = `${status.mangaTitle || "…"} — ${chapterPart}${pagePart}`;
+    }
+    if (mangaJobBar) {
+      // Chapter progress drives the bar; pages refine it inside one chapter so
+      // a long chapter still moves the indicator.
+      const chapterShare = status.totalChapters
+        ? (status.currentChapter - 1) / status.totalChapters
+        : 0;
+      const pageShare =
+        status.totalChapters && status.totalPages
+          ? status.currentPage / status.totalPages / status.totalChapters
+          : 0;
+      const percent = Math.min(100, Math.max(0, (chapterShare + pageShare) * 100));
+      mangaJobBar.style.width = `${percent}%`;
+    }
+
+    if (status.state !== "running") {
+      setMangaFeedback(status.message ?? "Prüfung beendet.", status.state === "failed");
+      return;
+    }
+  }
+}
+
+function initMangas() {
+  if (mangaInitialized) {
+    refreshMangaList();
+    return;
+  }
+  mangaInitialized = true;
+
+  if (mangaSourcesHint) mangaSourcesHint.textContent = mangaSupportedSources;
+
+  const settings = loadMangaSettings();
+  if (mangaDelayInput) mangaDelayInput.value = String(settings.delayMs);
+  if (mangaMaxChapters) mangaMaxChapters.value = String(settings.maxChapters);
+  mangaDelayInput?.addEventListener("change", saveMangaSettings);
+  mangaMaxChapters?.addEventListener("change", saveMangaSettings);
+
+  mangaSubscribeBtn?.addEventListener("click", subscribeManga);
+  mangaUrlInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") subscribeManga();
+  });
+  mangaCheckAllBtn?.addEventListener("click", () => startMangaCheck());
+  document.getElementById("manga-detail-close")?.addEventListener("click", () => {
+    document.getElementById("manga-detail").hidden = true;
+  });
+
+  mangaFilters?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-manga-filter]");
+    if (!button) return;
+    mangaActiveFilter = button.dataset.mangaFilter;
+    mangaFilters.querySelectorAll("[data-manga-filter]").forEach((chip) => {
+      chip.classList.toggle("is-active", chip === button);
+    });
+    if (mangaActiveFilter === "trash") {
+      refreshMangaTrash();
+    } else {
+      renderMangaList(applyMangaFilter(mangaSubscriptionsCache));
+    }
+  });
+
+  refreshMangaList();
+}
