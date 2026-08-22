@@ -140,28 +140,10 @@ const anilistDialogSearch = document.getElementById("anilist-dialog-search");
 const anilistDialogCancel = document.getElementById("anilist-dialog-cancel");
 const anilistDialogFeedback = document.getElementById("anilist-dialog-feedback");
 const anilistDialogResults = document.getElementById("anilist-dialog-results");
-const audibleDialog = document.getElementById("audible-dialog");
-const audibleDialogTitle = document.getElementById("audible-dialog-title");
-const audibleDialogQuery = document.getElementById("audible-dialog-query");
-const audibleDialogAuthor = document.getElementById("audible-dialog-author");
-const audibleDialogSearch = document.getElementById("audible-dialog-search");
-const audibleDialogCancel = document.getElementById("audible-dialog-cancel");
-const audibleDialogFeedback = document.getElementById("audible-dialog-feedback");
-const audibleDialogResults = document.getElementById("audible-dialog-results");
 const imageDialog = document.getElementById("image-dialog");
 const imageDialogTitle = document.getElementById("image-dialog-title");
 const imageDialogPreview = document.getElementById("image-dialog-preview");
 const imageDialogClose = document.getElementById("image-dialog-close");
-
-// Audiobookshelf sync
-const absUrlInput = document.getElementById("abs-url-input");
-const absKeyInput = document.getElementById("abs-key-input");
-const absTestBtn = document.getElementById("abs-test-btn");
-const absLibrariesBtn = document.getElementById("abs-libraries-btn");
-const absFeedback = document.getElementById("abs-feedback");
-const absLibrariesSection = document.getElementById("abs-libraries-section");
-const absLibrarySelect = document.getElementById("abs-library-select");
-const absImportBtn = document.getElementById("abs-import-btn");
 
 // Playlists
 const playlistList = document.getElementById("playlist-list");
@@ -298,9 +280,6 @@ let pendingTrashSelection = null;
 let pendingAniListSelection = null;
 let pendingAniListTargets = [];
 let pendingAniListFeedback = null;
-let pendingAudibleSelection = null;
-let pendingAudibleTargets = [];
-let pendingAudibleFeedback = null;
 
 function setActiveTab(tab, options = {}) {
   document.body.classList.remove("inspector-editing", "property-add-open");
@@ -2099,9 +2078,6 @@ function closeActionModal() {
   pendingAniListSelection = null;
   pendingAniListTargets = [];
   pendingAniListFeedback = null;
-  pendingAudibleSelection = null;
-  pendingAudibleTargets = [];
-  pendingAudibleFeedback = null;
 
   // If a conflict dialog is awaiting a decision and the modal is closed by other
   // means (backdrop click, Escape), resolve it as a cancel so the caller unblocks.
@@ -2124,7 +2100,7 @@ function closeActionModal() {
 }
 
 function hideModalCards() {
-  [trashDialog, anilistDialog, audibleDialog, imageDialog, conflictDialog, confirmDialog].forEach(
+  [trashDialog, anilistDialog, imageDialog, conflictDialog, confirmDialog].forEach(
     (dialog) => {
       if (dialog) {
         dialog.hidden = true;
@@ -2757,119 +2733,6 @@ async function openPlayer(item) {
 function closePlayer() {
   playerStop();
   if (playerDialog) playerDialog.hidden = true;
-}
-
-// ─── Audiobookshelf (ABS) sync ────────────────────────────────────────────
-
-const absSettingsKey = "fero.absSettings";
-
-function absGetSettings() {
-  return loadStoredJson(absSettingsKey, { url: "", key: "" });
-}
-
-function absSaveSettings(url, key) {
-  saveStoredJson(absSettingsKey, { url, key });
-}
-
-function absUrl() {
-  return absUrlInput?.value.trim() || absGetSettings().url;
-}
-
-function absKey() {
-  return absKeyInput?.value.trim() || absGetSettings().key;
-}
-
-// The API key travels in the request body, never in the URL — query strings
-// end up in logs and crash reports.
-async function absPost(path, payload) {
-  const res = await fetch(`fero://localhost/api/abs/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return res.json();
-}
-
-async function absTest() {
-  const url = absUrl();
-  const key = absKey();
-  if (!url) {
-    if (absFeedback) absFeedback.textContent = "Bitte Server-URL eingeben.";
-    return false;
-  }
-  absSaveSettings(url, key);
-  try {
-    const data = await absPost("test", { url, key });
-    if (data.ok) {
-      if (absFeedback) absFeedback.textContent = "Verbindung erfolgreich.";
-      return true;
-    }
-    if (absFeedback) absFeedback.textContent = `Fehler: ${data.error || "Unbekannt"}`;
-    return false;
-  } catch (e) {
-    if (absFeedback) absFeedback.textContent = `Verbindungsfehler: ${e.message}`;
-    return false;
-  }
-}
-
-async function absLoadLibraries() {
-  const url = absUrl();
-  const key = absKey();
-  if (!url) {
-    if (absFeedback) absFeedback.textContent = "Bitte Server-URL eingeben.";
-    return;
-  }
-  absSaveSettings(url, key);
-  if (absFeedback) absFeedback.textContent = "Lade Bibliotheken…";
-  try {
-    const data = await absPost("libraries", { url, key });
-    if (data.error) {
-      if (absFeedback) absFeedback.textContent = `Fehler: ${data.error}`;
-      return;
-    }
-    if (!absLibrarySelect || !absLibrariesSection) return;
-    absLibrarySelect.innerHTML = "";
-    (data.libraries || []).forEach((lib) => {
-      const opt = document.createElement("option");
-      opt.value = lib.id;
-      opt.textContent = `${lib.name} (${lib.media_type})`;
-      absLibrarySelect.appendChild(opt);
-    });
-    absLibrariesSection.hidden = data.libraries?.length === 0;
-    if (absFeedback) absFeedback.textContent = `${data.libraries?.length || 0} Bibliothek(en) gefunden.`;
-  } catch (e) {
-    if (absFeedback) absFeedback.textContent = `Fehler: ${e.message}`;
-  }
-}
-
-async function absImportLibrary() {
-  const url = absUrl();
-  const key = absKey();
-  const libraryId = absLibrarySelect?.value;
-  if (!url || !libraryId) return;
-  if (absFeedback) absFeedback.textContent = "Lade Bibliotheksinhalte…";
-  try {
-    const data = await absPost("library-items", { url, key, library: libraryId });
-    if (data.error) {
-      if (absFeedback) absFeedback.textContent = `Fehler: ${data.error}`;
-      return;
-    }
-    const count = data.items?.length || 0;
-    if (absFeedback) {
-      absFeedback.textContent = `${count} Einträge gefunden. Import-Funktion wird in einem späteren Release implementiert.`;
-    }
-  } catch (e) {
-    if (absFeedback) absFeedback.textContent = `Fehler: ${e.message}`;
-  }
-}
-
-function initAbsSettings() {
-  const stored = absGetSettings();
-  if (absUrlInput && stored.url) absUrlInput.value = stored.url;
-  if (absKeyInput && stored.key) absKeyInput.value = stored.key;
-  if (absTestBtn) absTestBtn.addEventListener("click", absTest);
-  if (absLibrariesBtn) absLibrariesBtn.addEventListener("click", absLoadLibraries);
-  if (absImportBtn) absImportBtn.addEventListener("click", absImportLibrary);
 }
 
 // ─── Playlist management ──────────────────────────────────────────────────
@@ -3704,322 +3567,6 @@ function applyAniListResult(metadata) {
   closeActionModal();
 }
 
-// ─── Audible dialog ────────────────────────────────────────────────────────
-
-function audibleDisplayTitle(result) {
-  return result.title || "Unbekannter Titel";
-}
-
-function audibleSummary(meta) {
-  const parts = [meta.title];
-  if (meta.author) {
-    parts.push(`von ${meta.author}`);
-  }
-  if (meta.year) {
-    parts.push(String(meta.year));
-  }
-  return parts.filter(Boolean).join(" · ");
-}
-
-function normalizeAudibleMetadata(result) {
-  const authors = Array.isArray(result.authors) ? result.authors.map((a) => a.name).filter(Boolean) : [];
-  const narrators = Array.isArray(result.narrators)
-    ? result.narrators.map((n) => n.name).filter(Boolean)
-    : [];
-  const series = Array.isArray(result.series) ? result.series[0] : null;
-  const year = result.release_date ? parseInt(result.release_date.slice(0, 4), 10) : null;
-
-  const coverImages = result.product_images ?? {};
-  const coverUrl = coverImages["1024"] || coverImages["500"] || null;
-
-  const genres = [];
-  if (Array.isArray(result.category_ladders) && result.category_ladders.length) {
-    const ladder = result.category_ladders[0].ladder ?? [];
-    ladder.forEach((rung) => {
-      if (rung.name && !genres.includes(rung.name)) {
-        genres.push(rung.name);
-      }
-    });
-  }
-
-  const description = result.publisher_summary
-    ? result.publisher_summary.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
-    : null;
-
-  const normalized = {
-    title: result.title || null,
-    media_type: "audiobook",
-    author: authors[0] || null,
-    authors: authors.length > 1 ? authors : undefined,
-    narrator: narrators[0] || null,
-    narrators: narrators.length > 1 ? narrators : undefined,
-    publisher: result.publisher_name || null,
-    description: description || null,
-    year: year || null,
-    runtime_minutes: result.runtime_length_min || null,
-    series_title: series?.title || null,
-    series_sequence: series?.sequence || null,
-    audible_asin: result.asin || null,
-    genres: genres.length ? genres : undefined,
-    cover_image_extra_large: coverUrl,
-  };
-
-  Object.keys(normalized).forEach((key) => {
-    if (
-      normalized[key] === null ||
-      normalized[key] === "" ||
-      normalized[key] === undefined ||
-      (Array.isArray(normalized[key]) && !normalized[key].length)
-    ) {
-      delete normalized[key];
-    }
-  });
-
-  return normalized;
-}
-
-function showAudibleResults(results, query) {
-  if (!audibleDialogResults) {
-    return;
-  }
-
-  clearNode(audibleDialogResults);
-  const list = Array.isArray(results) ? results : [];
-  if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "anilist-empty";
-    empty.textContent = `Keine Treffer für "${query}". Titel anpassen und erneut suchen.`;
-    audibleDialogResults.appendChild(empty);
-    return;
-  }
-
-  list.forEach((result) => {
-    const card = document.createElement("article");
-    card.className = "anilist-result";
-
-    const cover = document.createElement("div");
-    cover.className = "anilist-result-cover";
-    const coverImages = result.product_images ?? {};
-    const coverUrl = coverImages["500"] || coverImages["1024"] || null;
-    if (coverUrl) {
-      const image = document.createElement("img");
-      image.src = coverUrl;
-      image.alt = audibleDisplayTitle(result);
-      cover.appendChild(image);
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "anilist-result-meta";
-    const title = document.createElement("strong");
-    title.textContent = audibleDisplayTitle(result);
-
-    const authors = Array.isArray(result.authors) ? result.authors.map((a) => a.name).join(", ") : "";
-    const narrators = Array.isArray(result.narrators)
-      ? result.narrators.map((n) => n.name).join(", ")
-      : "";
-    const subtitle = document.createElement("span");
-    subtitle.textContent = [
-      authors ? `von ${authors}` : "",
-      narrators ? `Sprecher: ${narrators}` : "",
-      result.runtime_length_min ? `${result.runtime_length_min} min` : "",
-      result.release_date ? result.release_date.slice(0, 4) : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-
-    const description = document.createElement("p");
-    description.textContent = String(result.publisher_summary || "")
-      .replace(/<[^>]*>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 220);
-
-    meta.appendChild(title);
-    meta.appendChild(subtitle);
-    if (description.textContent) {
-      meta.appendChild(description);
-    }
-
-    const actions = document.createElement("div");
-    actions.className = "anilist-result-actions";
-    const applyButton = document.createElement("button");
-    applyButton.type = "button";
-    applyButton.className = "action-button primary";
-    applyButton.textContent = "Übernehmen";
-    applyButton.addEventListener("click", () => {
-      applyAudibleResult(result);
-    });
-    actions.appendChild(applyButton);
-
-    card.appendChild(cover);
-    card.appendChild(meta);
-    card.appendChild(actions);
-    audibleDialogResults.appendChild(card);
-  });
-}
-
-function openAudibleDialog(selection, feedbackNode = null, targetItems = []) {
-  const resolvedSelection =
-    selection && Array.isArray(selection.items) && typeof selection.key === "string"
-      ? selection
-      : normalizeSelection(selection);
-  if (!resolvedSelection || !resolvedSelection.item) {
-    return;
-  }
-
-  pendingAudibleSelection = resolvedSelection;
-  pendingAudibleTargets = targetItems.length ? targetItems : resolvedSelection.items;
-  pendingAudibleFeedback = feedbackNode;
-
-  if (audibleDialogTitle) {
-    audibleDialogTitle.textContent = `Audible-Treffer für ${selectionTitle(resolvedSelection)}`;
-  }
-  if (audibleDialogQuery) {
-    audibleDialogQuery.value = selectionSearchTitle(resolvedSelection);
-  }
-  if (audibleDialogAuthor) {
-    audibleDialogAuthor.value = resolvedSelection.item?.author ?? "";
-  }
-  if (audibleDialogFeedback) {
-    audibleDialogFeedback.textContent = "";
-    audibleDialogFeedback.className = "api-feedback";
-  }
-  if (audibleDialogResults) {
-    clearNode(audibleDialogResults);
-  }
-  if (trashDialog) {
-    trashDialog.hidden = true;
-  }
-  showModalCard(audibleDialog);
-  if (statusStrip) {
-    statusStrip.textContent = `Audible-Treffer für ${selectionTitle(resolvedSelection)} werden geladen.`;
-  }
-}
-
-async function runAudibleDialogSearch() {
-  if (!pendingAudibleSelection) {
-    return;
-  }
-
-  const query = audibleDialogQuery?.value.trim() || "";
-  if (!query) {
-    setApiFeedback(audibleDialogFeedback, "Bitte zuerst einen Suchbegriff eintragen.", "error");
-    return;
-  }
-
-  const author = audibleDialogAuthor?.value.trim() || "";
-  if (statusStrip) {
-    statusStrip.textContent = `Audible-Suche läuft für: ${query}${author ? ` von ${author}` : ""}`;
-  }
-  setApiFeedback(
-    audibleDialogFeedback,
-    `Suche Audible für "${query}"${author ? ` von ${author}` : ""}...`,
-    "loading"
-  );
-
-  const authorParam = author ? `&author=${encodeURIComponent(author)}` : "";
-  const response = await fetch(
-    `/api/audible-search?title=${encodeURIComponent(query)}${authorParam}&limit=10`
-  );
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const results = Array.isArray(payload.results) ? payload.results : [];
-  showAudibleResults(results, query);
-
-  if (!results.length) {
-    setApiFeedback(
-      audibleDialogFeedback,
-      `Keine Treffer für "${query}". Titel korrigieren und erneut suchen.`,
-      "error"
-    );
-    return;
-  }
-
-  setApiFeedback(audibleDialogFeedback, `${results.length} Treffer gefunden`, "success");
-}
-
-function applyAudibleResult(result) {
-  if (!pendingAudibleSelection) {
-    return;
-  }
-
-  const normalized = normalizeAudibleMetadata(result);
-  pendingAudibleTargets.forEach((target) => {
-    apiMetadata[target.source_path] = normalized;
-  });
-  saveStoredJson(metadataKey, apiMetadata);
-  currentPlan = projectPlan(sourcePlan);
-
-  const firstTarget = pendingAudibleTargets[0];
-  if (pendingAudibleSelection.type === "node") {
-    // After applying metadata, target_path and collection_path are recomputed
-    // (author + series produce a deeper path). Use the updated collection_path
-    // so the UI navigates to the new node rather than the now-gone old one.
-    const updatedRep = firstTarget
-      ? currentPlan.items.find((item) => item.source_path === firstTarget.source_path)
-      : null;
-    selectedCollectionKey =
-      updatedRep?.collection_path ||
-      pendingAudibleSelection.node?.path ||
-      selectedCollectionKey;
-    selectedItemKey = "";
-    selectedCollectionItemKey = "";
-  } else if (firstTarget?.source_path) {
-    selectedItemKey = firstTarget.source_path;
-    selectedCollectionItemKey = firstTarget.source_path;
-  }
-  renderPlan(currentPlan);
-  setApiFeedback(
-    pendingAudibleFeedback,
-    `Audible übernommen: ${audibleSummary(normalized)}`,
-    "success"
-  );
-  updateAuditTrail(
-    `Audible-Metadaten übernommen für ${selectionTitle(pendingAudibleSelection)}.`
-  );
-  void persistSidecarsForItems(
-    pendingAudibleTargets
-      .map((target) => currentPlan.items.find((item) => item.source_path === target.source_path))
-      .filter(Boolean)
-  ).catch((error) => {
-    if (statusStrip) {
-      statusStrip.textContent = `Audible übernommen, aber Sidecar konnte nicht geschrieben werden: ${error.message}`;
-    }
-  });
-  closeActionModal();
-}
-
-async function fetchAudibleForItem(item, feedbackNode = null, targetItems = [item], selection = null) {
-  const resolvedSelection =
-    selection && Array.isArray(selection.items) && typeof selection.key === "string"
-      ? selection
-      : selection
-        ? normalizeSelection(selection)
-        : normalizeSelection(item);
-  if (!resolvedSelection) {
-    throw new Error("Kein gültiger Eintrag für Audible vorhanden");
-  }
-
-  openAudibleDialog(resolvedSelection, feedbackNode, targetItems);
-  try {
-    await runAudibleDialogSearch();
-  } catch (error) {
-    setApiFeedback(
-      audibleDialogFeedback,
-      `Audible konnte keine Daten liefern: ${error.message}. Titel prüfen und erneut suchen.`,
-      "error"
-    );
-    if (statusStrip) {
-      statusStrip.textContent = `Audible konnte keine Daten liefern: ${error.message}`;
-    }
-    throw error;
-  }
-}
-
-// ─── End Audible dialog ─────────────────────────────────────────────────────
 
 function updateAuditTrail(message) {
   const entry = {
@@ -4422,10 +3969,7 @@ function renderDetail(item) {
   if (detailNotes) detailNotes.value = item.notes ?? "";
   if (detailSidecarPreview) detailSidecarPreview.textContent = item.sidecar_preview;
   if (detailFetchMetadata) {
-    detailFetchMetadata.textContent =
-      canonicalMediaType(mediaSelectionValue(item)) === "audiobook"
-        ? "Audible abrufen"
-        : "AniList abrufen";
+    detailFetchMetadata.textContent = "AniList abrufen";
   }
   if (currentActiveTab() !== "collections") {
     renderInspector(item);
@@ -4705,16 +4249,13 @@ function renderInspector(value) {
   }
   if (inspectorFetchMetadata) {
     const fetchType = canonicalMediaType(item ? mediaSelectionValue(item) : "");
-    // Provider follows the media type: Audible for audiobooks, Goodreads
-    // (via the subscription check) for webnovels, AniList otherwise.
+    // Provider follows the media type: the subscription check for webnovels,
+    // AniList otherwise.
     const isWebnovelFetch = fetchType === "webnovel";
     inspectorFetchMetadata.disabled = !metadataAllowed && !isWebnovelFetch;
-    inspectorFetchMetadata.textContent =
-      fetchType === "audiobook"
-        ? "Audible abrufen"
-        : isWebnovelFetch
-          ? "Goodreads/AniList aktualisieren"
-          : "AniList abrufen";
+    inspectorFetchMetadata.textContent = isWebnovelFetch
+      ? "Metadaten aktualisieren"
+      : "AniList abrufen";
   }
   if (inspectorNotDuplicate) {
     const duplicateRelevant = selectionHasDuplicateFlag(selection) || selectionHasDuplicateOverride(selection);
@@ -7064,8 +6605,6 @@ if (detailFetchMetadata) {
       return;
     }
 
-    const mediaType = canonicalMediaType(detailMediaTypeInput?.value || item.media_type);
-    const isAudiobook = mediaType === "audiobook";
 
     try {
       upsertCorrection(item);
@@ -7075,13 +6614,9 @@ if (detailFetchMetadata) {
         series_title: detailTitle?.value.trim() || item.series_title,
         media_type: detailMediaTypeInput?.value || item.media_type,
       };
-      if (isAudiobook) {
-        await fetchAudibleForItem(draft, detailApiFeedback, [item], normalizeSelection(draft));
-      } else {
-        await fetchAniListForItem(draft, detailApiFeedback, [item], normalizeSelection(draft));
-      }
+      await fetchAniListForItem(draft, detailApiFeedback, [item], normalizeSelection(draft));
     } catch (error) {
-      const provider = isAudiobook ? "Audible" : "AniList";
+      const provider = "AniList";
       setApiFeedback(
         detailApiFeedback,
         `${provider} konnte keine Daten liefern: ${error.message}. Titel prüfen und erneut abrufen.`,
@@ -7272,8 +6807,6 @@ if (inspectorFetchMetadata) {
     if (!selectionSupportsMetadata(inspectorSelection)) {
       return;
     }
-    const isAudiobook = mediaType === "audiobook";
-
     try {
       upsertSelectionCorrection(inspectorSelection);
       const inspectorDraft = {
@@ -7287,23 +6820,14 @@ if (inspectorFetchMetadata) {
           ? { ...inspectorSelection, item: inspectorDraft }
           : normalizeSelection(inspectorDraft);
 
-      if (isAudiobook) {
-        await fetchAudibleForItem(
-          inspectorDraft,
-          inspectorApiFeedback,
-          inspectorSelection.items,
-          selectionForSearch
-        );
-      } else {
-        await fetchAniListForItem(
-          inspectorDraft,
-          inspectorApiFeedback,
-          inspectorSelection.items,
-          selectionForSearch
-        );
-      }
+      await fetchAniListForItem(
+        inspectorDraft,
+        inspectorApiFeedback,
+        inspectorSelection.items,
+        selectionForSearch
+      );
     } catch (error) {
-      const provider = isAudiobook ? "Audible" : "AniList";
+      const provider = "AniList";
       setApiFeedback(
         inspectorApiFeedback,
         `${provider} konnte keine Daten liefern: ${error.message}. Titel prüfen und erneut abrufen.`,
@@ -7383,41 +6907,6 @@ if (anilistDialogSearch) {
 if (anilistDialogCancel) {
   anilistDialogCancel.addEventListener("click", () => {
     closeActionModal();
-  });
-}
-
-if (audibleDialogSearch) {
-  audibleDialogSearch.addEventListener("click", async () => {
-    try {
-      await runAudibleDialogSearch();
-    } catch (error) {
-      setApiFeedback(
-        audibleDialogFeedback,
-        `Audible konnte keine Daten liefern: ${error.message}. Titel prüfen und erneut suchen.`,
-        "error"
-      );
-      if (statusStrip) {
-        statusStrip.textContent = `Audible konnte keine Daten liefern: ${error.message}`;
-      }
-    }
-  });
-}
-
-if (audibleDialogCancel) {
-  audibleDialogCancel.addEventListener("click", () => {
-    closeActionModal();
-  });
-}
-
-if (audibleDialogQuery) {
-  audibleDialogQuery.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      audibleDialogSearch?.click();
-    }
-    if (event.key === "Escape") {
-      closeActionModal();
-    }
   });
 }
 
@@ -7553,7 +7042,6 @@ renderAuditTrail();
 syncTemplateInputs();
 initPlayer();
 initPlaylists();
-initAbsSettings();
 bootstrapVault().catch(() => {
   renderRecentVaults();
   syncVaultHint();

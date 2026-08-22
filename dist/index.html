@@ -600,7 +600,6 @@
             <button class="settings-tab is-active" data-settings-tab="general">Allgemein</button>
             <button class="settings-tab" data-settings-tab="folders">Ordnerstruktur</button>
             <button class="settings-tab" data-settings-tab="webnovels">Webnovels</button>
-            <button class="settings-tab" data-settings-tab="abs">Audiobookshelf</button>
             <button class="settings-tab" data-settings-tab="info">Hinweise</button>
           </div>
           <div class="settings-pane is-active" data-settings-pane="general">
@@ -749,47 +748,6 @@
                 <button class="action-button" id="webnovel-blocklist-add-btn">Hinzufügen</button>
               </div>
               <p class="field-hint" id="webnovel-blocklist-feedback"></p>
-            </section>
-            </div>
-          </div>
-          <div class="settings-pane" data-settings-pane="abs">
-            <div class="panel-grid single">
-<section class="panel">
-              <p class="panel-label">Audiobookshelf Sync</p>
-              <h3>ABS-Server verbinden</h3>
-              <p class="body-copy">
-                Fortschritt zwischen Fero und einem lokalen Audiobookshelf-Server synchronisieren.
-              </p>
-              <div class="stack">
-                <label class="field">
-                  <span>Server-URL</span>
-                  <input
-                    id="abs-url-input"
-                    type="text"
-                    placeholder="http://localhost:13378"
-                  />
-                </label>
-                <label class="field">
-                  <span>API-Key</span>
-                  <input
-                    id="abs-key-input"
-                    type="password"
-                    placeholder="ABS API-Schlüssel"
-                  />
-                </label>
-                <div class="toolbar">
-                  <button class="action-button primary" id="abs-test-btn">Verbindung testen</button>
-                  <button class="action-button" id="abs-libraries-btn">Bibliotheken laden</button>
-                </div>
-                <p class="field-hint" id="abs-feedback"></p>
-                <div id="abs-libraries-section" hidden>
-                  <label class="field">
-                    <span>Bibliothek</span>
-                    <select id="abs-library-select"></select>
-                  </label>
-                  <button class="action-button" id="abs-import-btn">Bibliothek importieren</button>
-                </div>
-              </div>
             </section>
             </div>
           </div>
@@ -953,25 +911,6 @@
         </div>
         <div class="api-feedback" id="anilist-dialog-feedback"></div>
         <div class="anilist-results" id="anilist-dialog-results"></div>
-      </section>
-
-      <section class="panel modal-card anilist-modal" id="audible-dialog" hidden>
-        <p class="panel-label">Audible</p>
-        <h3 id="audible-dialog-title">Hörbuch suchen</h3>
-        <label class="field">
-          <span>Titel</span>
-          <input id="audible-dialog-query" type="text" />
-        </label>
-        <label class="field">
-          <span>Autor (optional)</span>
-          <input id="audible-dialog-author" type="text" placeholder="z.B. Stephen King" />
-        </label>
-        <div class="toolbar">
-          <button class="action-button primary" id="audible-dialog-search">Suchen</button>
-          <button class="action-button" id="audible-dialog-cancel">Abbrechen</button>
-        </div>
-        <div class="api-feedback" id="audible-dialog-feedback"></div>
-        <div class="anilist-results" id="audible-dialog-results"></div>
       </section>
 
       <section class="panel modal-card" id="confirm-dialog" hidden>
