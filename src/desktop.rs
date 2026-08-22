@@ -127,11 +127,7 @@ fn write_private_file(path: &Path, contents: &str) -> std::io::Result<()> {
 
 fn anilist_cache_path() -> Option<PathBuf> {
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
-    Some(
-        PathBuf::from(home)
-            .join(".fero")
-            .join(ANILIST_CACHE_FILE),
-    )
+    Some(PathBuf::from(home).join(".fero").join(ANILIST_CACHE_FILE))
 }
 
 fn load_anilist_cache() -> AniListCacheMap {
@@ -8044,11 +8040,7 @@ fn build_open_debug_log_response() -> WebnovelSimpleResponse {
 /// Debug-log path (`~/.fero/webnovel_debug.log`).
 fn debug_log_path() -> Option<PathBuf> {
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
-    Some(
-        PathBuf::from(home)
-            .join(".fero")
-            .join("webnovel_debug.log"),
-    )
+    Some(PathBuf::from(home).join(".fero").join("webnovel_debug.log"))
 }
 
 /// Size at which the debug log is rotated to `<name>.1`.
