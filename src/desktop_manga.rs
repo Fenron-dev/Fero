@@ -755,7 +755,7 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
     let thread_job_id = job_id.clone();
     std::thread::spawn(move || {
         let _active = CheckActiveGuard;
-        let outcome = run_check(&ws.vault, &options, &thread_job_id);
+        let outcome = run_check(&ws, &options, &thread_job_id);
         update_job(&thread_job_id, |status| match &outcome {
             Ok(message) => {
                 status.state = "done".to_string();
@@ -968,7 +968,7 @@ fn check_one(
         };
 
         match download_chapter(
-            vault,
+            &ws.vault,
             client,
             source.as_ref(),
             subscription,

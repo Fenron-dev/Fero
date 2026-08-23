@@ -1618,7 +1618,7 @@ fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
     let thread_job_id = job_id.clone();
     std::thread::spawn(move || {
         let _active = WebnovelCheckActiveGuard;
-        let outcome = run_webnovel_check(&ws.vault, &options, &thread_job_id);
+        let outcome = run_webnovel_check(&ws, &options, &thread_job_id);
         update_webnovel_job(&thread_job_id, |status| match &outcome {
             Ok(message) => {
                 status.state = "done".to_string();
