@@ -245,7 +245,9 @@ pub(super) struct WebnovelSolveStatusResponse {
     message: Option<String>,
 }
 
-pub(super) fn build_webnovel_solve_status_response(query: Option<&str>) -> WebnovelSolveStatusResponse {
+pub(super) fn build_webnovel_solve_status_response(
+    query: Option<&str>,
+) -> WebnovelSolveStatusResponse {
     let host = query
         .and_then(|q| extract_query_value(q, "host"))
         .unwrap_or_default();
@@ -536,7 +538,9 @@ pub(super) struct WebnovelLoginStatusResponse {
     message: Option<String>,
 }
 
-pub(super) fn build_webnovel_login_status_response(query: Option<&str>) -> WebnovelLoginStatusResponse {
+pub(super) fn build_webnovel_login_status_response(
+    query: Option<&str>,
+) -> WebnovelLoginStatusResponse {
     let host = query
         .and_then(|q| extract_query_value(q, "host"))
         .map(|h| host_of(&h).unwrap_or(h).to_lowercase())
