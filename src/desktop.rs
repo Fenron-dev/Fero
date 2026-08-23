@@ -15,7 +15,7 @@ use crate::api::novel::{
     PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
-use crate::core::properties::{legacy_sidecar_path_for, render_sidecar_yaml, sidecar_path_for};
+use crate::core::properties::{legacy_sidecar_path_for, sidecar_path_for};
 use crate::core::vault::{RelativePath, Vault};
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
@@ -29,7 +29,7 @@ use crate::deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
 };
 use crate::error::{Result, VaultError};
-use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
+use crate::media::{MediaStatus, MediaType};
 use serde::{Deserialize, Serialize};
 use tauri::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
 use tauri::Manager;
@@ -1258,7 +1258,8 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
         Ok(Some(existing)) => {
             return WebnovelSubscribeResponse {
                 subscription: Some(WebnovelSubscriptionSummary::from_subscription(
-                    &existing, &ws.vault,
+                    &existing,
+                    ws.work_dir(MediaKind::Webnovel, &existing).as_deref(),
                 )),
                 already_subscribed: true,
                 error: None,
@@ -1330,7 +1331,7 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
         Ok(()) => WebnovelSubscribeResponse {
             subscription: Some(WebnovelSubscriptionSummary::from_subscription(
                 &subscription,
-                &ws.vault,
+                ws.work_dir(MediaKind::Webnovel, &subscription).as_deref(),
             )),
             already_subscribed: false,
             error: None,
