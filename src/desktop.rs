@@ -817,6 +817,9 @@ struct WebnovelSubscriptionSummary {
     anilist_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
+    /// Delivery target set for this subscription alone, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_dir: Option<String>,
     /// Whether a cached cover exists in the work folder.
     ///
     /// Only a flag: with per-work targets there is no library-relative path to
@@ -852,6 +855,7 @@ impl WebnovelSubscriptionSummary {
             goodreads_url: subscription.goodreads_url.clone(),
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
+            target_dir: subscription.target_dir.clone(),
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
@@ -1021,6 +1025,7 @@ fn build_targets_response() -> TargetsResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SaveTargetsRequest {
     /// Media kind id, or `null` to address the shared fallback.
     #[serde(default)]
@@ -1110,6 +1115,7 @@ pub(crate) fn resolve_workspace(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSubscribeRequest {
     url: String,
     #[serde(default)]
@@ -1249,6 +1255,7 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelUnsubscribeRequest {
     id: String,
     /// When false, the novel's vault folder (EPUBs + chapter cache) is removed.
@@ -1392,6 +1399,7 @@ fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelTrashActionRequest {
     id: String,
     #[serde(default)]
@@ -1464,8 +1472,18 @@ fn build_webnovel_purge_response(body: &[u8]) -> WebnovelSimpleResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelUpdateRequest {
     id: String,
+    /// New delivery target for this one subscription.
+    ///
+    /// Absent means "leave as is"; clearing needs `clearTargetDir`, because a
+    /// missing field and an explicit null are indistinguishable here and an
+    /// unrelated update must never wipe the target.
+    #[serde(default)]
+    target_dir: Option<String>,
+    #[serde(default)]
+    clear_target_dir: bool,
     #[serde(default)]
     completed: Option<bool>,
     #[serde(default)]
@@ -1500,6 +1518,11 @@ fn build_webnovel_update_response(body: &[u8]) -> WebnovelSimpleResponse {
     }
     if let Some(enabled) = req.enabled {
         subscription.enabled = enabled;
+    }
+    if req.clear_target_dir {
+        subscription.target_dir = None;
+    } else if let Some(target) = req.target_dir {
+        subscription.target_dir = Some(target);
     }
 
     match save_subscription(&ws.store, &subscription) {
@@ -2390,6 +2413,7 @@ fn build_webnovel_blocklist_response(query: Option<&str>) -> WebnovelBlocklistRe
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelBlocklistSaveRequest {
     entries: Vec<BlocklistEntry>,
     #[serde(default)]
@@ -2447,6 +2471,7 @@ fn set_solve_state(host: &str, state: impl Into<String>) {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSolveRequest {
     url: String,
 }
@@ -2822,6 +2847,7 @@ fn drop_session(host: &str) {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelLoginRequest {
     /// Host to log in to (e.g. "novelupdates.com"); a URL is also accepted.
     host: String,

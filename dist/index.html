@@ -1,1054 +1,165 @@
-<!doctype html>
-<html lang="de">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fero</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <section class="vault-gate" id="vault-gate" aria-label="Vault öffnen">
-      <div class="vault-gate-inner">
-        <div class="vault-mark">MV</div>
-        <div class="vault-gate-copy">
-          <h1>Fero</h1>
-          <p class="body-copy">Lokale Medienverwaltung mit portablem Vault.</p>
-        </div>
-
-        <div class="vault-gate-card">
-          <section class="gate-section">
-            <p class="section-label">Bestehenden Vault öffnen</p>
-            <button class="action-button primary" id="vault-open-button">Vault im Finder auswählen</button>
-          </section>
-
-          <div class="vault-create-grid">
-            <section class="gate-section">
-              <p class="section-label">Neuer Vault</p>
-              <input id="vault-create-name" type="text" placeholder="Mein Fero" />
-            </section>
-            <section class="gate-section">
-              <p class="section-label">Speicherort</p>
-              <button class="action-button primary" id="vault-create-submit">Vault erstellen</button>
-            </section>
-          </div>
-        </div>
-
-        <section class="recent-vaults">
-          <h2>Zuletzt geöffnet</h2>
-          <div id="recent-vaults-list"></div>
-        </section>
-      </div>
-    </section>
-
-    <div class="app-shell">
-      <aside class="sidebar">
-        <div>
-          <p class="eyebrow">Portable Fero</p>
-          <h1>Fero</h1>
-          <p class="lead">
-            Lokale Verwaltung mit relativen Pfaden, Inbox, Review und Sidecars.
-          </p>
-        </div>
-
-        <nav class="nav" aria-label="Hauptnavigation">
-          <button class="nav-item is-active" data-tab="overview">Überblick</button>
-          <button class="nav-item" data-tab="inbox">Inbox</button>
-          <button class="nav-item" data-tab="review">Prüfung</button>
-          <button class="nav-item" data-tab="collections">Sammlungen</button>
-          <button class="nav-item" data-tab="playlists">Wiedergabelisten</button>
-          <button class="nav-item" data-tab="webnovels">Webnovels</button>
-          <button class="nav-item" data-tab="mangas">Mangas</button>
-          <button class="nav-item" data-tab="settings">Einstellungen</button>
-          <button class="nav-item" data-tab="trash">Papierkorb</button>
-        </nav>
-
-        <button class="action-button vault-switch-btn" id="vault-switch" title="Anderen Vault öffnen oder neuen erstellen">
-          ← Vault wechseln
-        </button>
-
-        <section class="collection-sidebar" id="collection-sidebar" aria-label="Sammlungen">
-          <button class="action-button collection-back" id="collection-back-dashboard">
-            Zurück zum Dashboard
-          </button>
-          <p class="panel-label">Sammlungen</p>
-          <div class="collection-sidebar-list" id="collection-sidebar-list"></div>
-        </section>
-
-      </aside>
-
-      <main class="workspace">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Lokaler Testlauf</p>
-            <h2 id="view-title">Überblick</h2>
-          </div>
-
-          <div class="toolbar" id="topbar-vault-actions">
-            <button class="action-button primary" id="run-demo">Vault scannen</button>
-            <button class="action-button primary subtle" id="apply-import">Import anwenden</button>
-            <button class="action-button" id="open-vault-folder">Im Finder öffnen</button>
-          </div>
-        </header>
-
-        <section class="status-strip" id="status-strip">
-          Bereit für Inbox, Review und Duplikat-Checks.
-        </section>
-
-        <section class="view is-active" data-view="overview">
-          <div class="metrics">
-            <article class="metric">
-              <span>Inbox</span>
-              <strong id="metric-inbox">12 Dateien</strong>
-            </article>
-            <article class="metric">
-              <span>Review</span>
-              <strong id="metric-review">4 unklar</strong>
-            </article>
-            <article class="metric">
-              <span>Duplikate</span>
-              <strong id="metric-duplicates">2 gefunden</strong>
-            </article>
-            <article class="metric">
-              <span>Sammlungen</span>
-              <strong id="metric-collections">6 smart</strong>
-            </article>
-          </div>
-
-          <!-- Dashboard: Weitermachen -->
-          <section class="dashboard-section" id="dashboard-resume-section" hidden>
-            <h3 class="dashboard-section-title">Weitermachen</h3>
-            <div class="dashboard-scroll" id="dashboard-resume-cards"></div>
-          </section>
-
-          <!-- Dashboard: Neu hinzugefügt -->
-          <section class="dashboard-section" id="dashboard-recent-section" hidden>
-            <h3 class="dashboard-section-title">Neu hinzugefügt</h3>
-            <div class="dashboard-groups" id="dashboard-recent-cards"></div>
-          </section>
-
-          <p class="body-copy" id="dashboard-empty-hint" hidden>
-              Noch keine Dateien im Vault. Lege Medien im Inbox-Ordner ab und starte „Vault scannen“.
-            </p>
-        </section>
-
-        <section class="view" data-view="inbox">
-          <div class="panel-grid single">
-            <section class="panel">
-              <p class="panel-label">Inbox-Queue</p>
-              <h3>Neue Dateien warten auf Zuordnung</h3>
-              <div class="toolbar">
-                <button class="action-button" id="inbox-multi-toggle">Mehrfachauswahl</button>
-                <button class="action-button danger" id="inbox-delete-selected" hidden>
-                  Auswahl löschen
-                </button>
-              </div>
-              <div class="table">
-                <div class="table-row table-head">
-                  <span>Datei</span>
-                  <span>Status</span>
-                  <span>Ziel</span>
-                </div>
-                <div id="inbox-rows"></div>
-              </div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" data-view="review">
-          <div class="review-layout">
-            <div class="panel-grid review-grid">
-              <section class="panel">
-                <p class="panel-label">Manuelle Klärung</p>
-                <h3>Wenn Inhalt oder Zusammengehörigkeit unklar sind</h3>
-                <div class="toolbar">
-                  <button class="action-button" id="review-multi-toggle">Mehrfachauswahl</button>
-                  <button class="action-button danger" id="review-delete-selected" hidden>
-                    Auswahl löschen
-                  </button>
-                </div>
-                <div class="table">
-                  <div class="table-row table-head">
-                    <span>Fall</span>
-                    <span>Status</span>
-                    <span>Aktion</span>
-                  </div>
-                  <div id="review-rows"></div>
-                </div>
-              </section>
-              <section class="panel">
-                <p class="panel-label">Detail & Korrektur</p>
-                <h3 id="detail-heading">Eintrag auswählen</h3>
-                <p class="body-copy" id="detail-subtitle">
-                  Die gewählte Datei wird hier mit Zielpfad, Sidecar-Vorschau und Korrekturfeldern angezeigt.
-                </p>
-
-              <div class="detail-summary">
-                <div>
-                  <span>Quelle</span>
-                  <strong id="detail-source-path">-</strong>
-                </div>
-                  <div>
-                    <span>Ziel</span>
-                    <strong id="detail-target-path">-</strong>
-                  </div>
-                  <div>
-                    <span>Typ</span>
-                    <strong id="detail-media-type">-</strong>
-                  </div>
-                  <div>
-                    <span>Quelle der Erkennung</span>
-                    <strong id="detail-classification-source">-</strong>
-                  </div>
-                  <div>
-                    <span>Confidence</span>
-                    <strong id="detail-confidence">-</strong>
-                  </div>
-                  <div>
-                    <span>Größe</span>
-                    <strong id="detail-size">-</strong>
-                  </div>
-                  <div>
-                    <span>Status</span>
-                    <strong id="detail-status-label">-</strong>
-                  </div>
-                  <div>
-                  <span>Sidecar</span>
-                  <strong id="detail-sidecar-path">-</strong>
-                </div>
-              </div>
-              <p class="body-copy detail-episode-info" id="detail-episode-info"></p>
-
-              <div class="stack detail-form">
-                  <label class="field">
-                    <span>Titel</span>
-                    <input id="detail-title" type="text" />
-                  </label>
-                  <label class="field">
-                    <span>Medientyp</span>
-                    <select id="detail-media-type-input"></select>
-                  </label>
-                  <label class="field">
-                    <span>Jahr</span>
-                    <input id="detail-year" type="number" min="1900" max="2100" />
-                  </label>
-                  <label class="field">
-                    <span>Status</span>
-                    <select id="detail-status"></select>
-                  </label>
-                  <label class="field">
-                    <span>Notiz</span>
-                    <textarea id="detail-notes" rows="3"></textarea>
-                  </label>
-                  <div class="toolbar">
-                    <button class="action-button" id="detail-fetch-metadata">AniList abrufen</button>
-                    <button class="action-button primary" id="detail-apply">Korrektur übernehmen</button>
-                    <button class="action-button" id="detail-reset">Zurücksetzen</button>
-                  </div>
-                  <div class="api-feedback" id="detail-api-feedback"></div>
-                </div>
-
-                <p class="field-hint" id="detail-hint">
-                  Korrekturen bleiben lokal vorgemerkt, bis du oben den Import anwendest.
-                </p>
-                <p class="panel-label">Sidecar-Vorschau</p>
-                <pre class="code-block" id="detail-sidecar-preview">Wähle einen Eintrag aus.</pre>
-              </section>
-            </div>
-
-            <section class="panel review-footer">
-              <p class="panel-label">Audit Trail</p>
-              <h3>Jede Korrektur bleibt nachvollziehbar</h3>
-              <p class="body-copy">
-                Import-Dry-Runs, manuelle Anpassungen und spätere Korrekturen werden
-                protokolliert, damit die Medienstruktur immer erklärbar bleibt.
-              </p>
-              <div class="audit-trail" id="audit-trail"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" data-view="collections">
-          <div class="collections-layout">
-            <section class="panel collection-detail">
-              <nav class="collection-breadcrumb" id="collection-breadcrumb" aria-label="Sammlungspfad"></nav>
-              <div class="collection-tag-filter" id="collection-tag-filter" hidden></div>
-
-              <div class="collection-hero">
-                <div>
-                  <p class="panel-label">Sammlung</p>
-                  <h3 id="collection-title">Alle Dateien</h3>
-                  <p class="body-copy" id="collection-description">
-                    Alle gefundenen Einträge im aktuellen Vault-Scan.
-                  </p>
-                </div>
-
-                <div class="collection-meta" id="collection-meta"></div>
-              </div>
-
-              <div class="collection-profile" id="collection-profile"></div>
-
-              <div class="webnovel-bulkbar" id="collection-bulkbar" hidden>
-                <span id="collection-bulk-count">0 ausgewählt</span>
-                <button class="action-button danger" id="collection-bulk-trash">In den Papierkorb</button>
-                <button class="action-button" id="collection-bulk-clear">Auswahl aufheben</button>
-              </div>
-              <div class="collection-viewbar" id="collection-viewbar">
-                <p class="panel-label">Inhalt</p>
-                <div class="collection-view-actions">
-                  <button class="action-button compact" id="collection-multi-toggle">Mehrfachauswahl</button>
-                  <div class="segmented-control" id="collection-view-toggle" aria-label="Ansicht wechseln">
-                    <button class="is-active" data-collection-view="cover">Cover</button>
-                    <button data-collection-view="list">Liste</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="collection-card-grid" id="collection-cards"></div>
-
-              <div class="table collection-table">
-                <div class="table-row table-head">
-                  <button type="button" class="table-sort is-active" id="collection-sort-name">Name</button>
-                  <button type="button" class="table-sort" id="collection-sort-type">Typ</button>
-                  <button type="button" class="table-sort" id="collection-sort-target">Inhalt</button>
-                </div>
-                <div id="collection-rows"></div>
-              </div>
-
-              <section class="collection-editor" id="collection-editor">
-                <div>
-                  <p class="panel-label">Datei bearbeiten</p>
-                  <h3 id="collection-editor-title">Eintrag auswählen</h3>
-                  <p class="body-copy" id="collection-editor-subtitle">
-                    Wähle unten eine Datei, um Zielpfad, Metadaten und Sidecar zu prüfen.
-                  </p>
-                </div>
-
-                <div class="detail-summary compact">
-                  <div>
-                    <span>Quelle</span>
-                    <strong id="collection-editor-source">-</strong>
-                  </div>
-                  <div>
-                    <span>Ziel</span>
-                    <strong id="collection-editor-target">-</strong>
-                  </div>
-                  <div>
-                    <span>Typ</span>
-                    <strong id="collection-editor-type">-</strong>
-                  </div>
-                  <div>
-                    <span>Sidecar</span>
-                    <strong id="collection-editor-sidecar">-</strong>
-                  </div>
-                </div>
-
-                <div class="stack detail-form">
-                  <label class="field">
-                    <span>Titel</span>
-                    <input id="collection-editor-name" type="text" />
-                  </label>
-                  <label class="field">
-                    <span>Medientyp</span>
-                    <select id="collection-editor-media-type"></select>
-                  </label>
-                  <label class="field">
-                    <span>Jahr</span>
-                    <input id="collection-editor-year" type="number" min="1900" max="2100" />
-                  </label>
-                  <label class="field">
-                    <span>Status</span>
-                    <select id="collection-editor-status"></select>
-                  </label>
-                  <label class="field">
-                    <span>Notiz</span>
-                    <textarea id="collection-editor-notes" rows="3"></textarea>
-                  </label>
-                  <div class="toolbar">
-                    <button class="action-button" id="collection-editor-fetch">AniList abrufen</button>
-                    <button class="action-button primary" id="collection-editor-apply">Korrektur übernehmen</button>
-                    <button class="action-button" id="collection-editor-reset">Zurücksetzen</button>
-                  </div>
-                  <div class="api-feedback" id="collection-editor-api-feedback"></div>
-                </div>
-
-                <p class="panel-label">Sidecar-Vorschau</p>
-                <pre class="code-block" id="collection-editor-sidecar-preview">Wähle einen Eintrag aus.</pre>
-              </section>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" data-view="playlists">
-          <div class="playlists-layout">
-            <aside class="panel playlists-sidebar">
-              <div class="playlists-sidebar-header">
-                <p class="panel-label">Wiedergabelisten</p>
-                <button class="action-button primary compact" id="playlist-new">+ Neue Liste</button>
-              </div>
-              <div id="playlist-list"></div>
-            </aside>
-            <section class="panel playlists-detail">
-              <div id="playlist-detail-empty" class="playlists-empty-hint">
-                <p class="body-copy">Wähle eine Playlist aus oder erstelle eine neue.</p>
-              </div>
-              <div id="playlist-detail-content" hidden>
-                <div class="playlists-detail-header">
-                  <div>
-                    <p class="panel-label" id="playlist-detail-kind-label">Manuell</p>
-                    <h3 id="playlist-detail-title">—</h3>
-                    <p class="body-copy" id="playlist-detail-count">0 Einträge</p>
-                  </div>
-                  <div class="playlists-detail-actions">
-                    <button class="action-button primary" id="playlist-play-all" hidden>▶ Alle abspielen</button>
-                    <button class="action-button danger" id="playlist-delete">Löschen</button>
-                  </div>
-                </div>
-                <div class="table" id="playlist-items-table">
-                  <div class="table-row table-head">
-                    <span>Titel</span>
-                    <span>Typ</span>
-                    <span></span>
-                  </div>
-                  <div id="playlist-items-rows"></div>
-                </div>
-                <p class="body-copy playlist-items-hint" id="playlist-items-hint" hidden>
-                  Noch keine Einträge. Wähle in den Sammlungen eine Datei aus und nutze dort „+ Zur Wiedergabeliste“.
-                </p>
-              </div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" data-view="webnovels">
-          <section class="panel">
-            <p class="panel-label">Webnovel-Abos</p>
-            <h3>Novel per Link abonnieren</h3>
-            <div class="webnovel-subscribe-row">
-              <input
-                id="webnovel-url-input"
-                type="text"
-                placeholder="https://www.royalroad.com/fiction/..."
-              />
-              <button class="action-button primary" id="webnovel-subscribe-btn">Abonnieren</button>
-              <button class="action-button" id="webnovel-check-all-btn">Jetzt alle prüfen</button>
-              <button class="action-button" id="webnovel-debug-btn">Debug-Log</button>
-            </div>
-            <div class="webnovel-login-row">
-              <span class="field-hint" id="webnovel-login-status">NovelUpdates: nicht eingeloggt</span>
-              <button class="action-button" id="webnovel-login-btn">Bei NovelUpdates einloggen</button>
-              <button class="action-button" id="webnovel-logout-btn" hidden>Ausloggen</button>
-            </div>
-            <p class="field-hint" id="webnovel-feedback"></p>
-            <div class="webnovel-progress" id="webnovel-job-progress" hidden>
-              <p class="field-hint" id="webnovel-job-text"></p>
-              <div class="webnovel-progress-track">
-                <div class="webnovel-progress-bar" id="webnovel-job-bar"></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel webnovel-library">
-            <div class="webnovel-toolbar">
-              <div class="webnovel-filters" id="webnovel-filters">
-                <button class="webnovel-chip is-active" data-webnovel-filter="all">Alle</button>
-                <button class="webnovel-chip" data-webnovel-filter="ongoing">Laufend</button>
-                <button class="webnovel-chip" data-webnovel-filter="completed">Abgeschlossen</button>
-                <button class="webnovel-chip" data-webnovel-filter="paused">Pausiert</button>
-                <button class="webnovel-chip" data-webnovel-filter="error">Fehler</button>
-                <button class="webnovel-chip" data-webnovel-filter="new">Neue Kapitel</button>
-                <button class="webnovel-chip" data-webnovel-filter="trash">Papierkorb</button>
-              </div>
-              <button class="action-button" id="webnovel-multi-toggle">Mehrfachauswahl</button>
-              <select class="action-button" id="webnovel-sort" title="Sortierung">
-                <option value="title">Name (A–Z)</option>
-                <option value="last_check">Zuletzt geprüft</option>
-                <option value="new_chapters">Neue Kapitel zuerst</option>
-                <option value="rating">Bewertung</option>
-              </select>
-              <button class="action-button" id="webnovel-view-toggle" title="Zwischen Karten- und Listenansicht wechseln">
-                Listenansicht
-              </button>
-            </div>
-            <div class="webnovel-bulkbar" id="webnovel-bulkbar" hidden>
-              <span id="webnovel-bulk-count">0 ausgewählt</span>
-              <button class="action-button" id="webnovel-bulk-pause">Pausieren</button>
-              <button class="action-button" id="webnovel-bulk-resume">Fortsetzen</button>
-              <button class="action-button danger" id="webnovel-bulk-delete">In den Papierkorb</button>
-            </div>
-            <div class="stack webnovel-list" id="webnovel-list"></div>
-            <p class="body-copy" id="webnovel-list-empty">Noch keine Abos vorhanden.</p>
-          </section>
-
-          <section class="workspace-modal" id="webnovel-detail" hidden>
-            <div class="workspace-modal-card">
-              <button class="action-button workspace-modal-close" id="webnovel-detail-close">✕ Schließen</button>
-              <div class="webnovel-detail-grid">
-                <div class="webnovel-detail-side">
-                  <img id="webnovel-detail-cover" alt="Cover" hidden />
-                  <h3 id="webnovel-detail-title"></h3>
-                  <p class="webnovel-card-meta" id="webnovel-detail-author"></p>
-                  <p class="webnovel-card-meta" id="webnovel-detail-rating"></p>
-                </div>
-                <div class="webnovel-detail-main">
-                  <div id="webnovel-detail-badges"></div>
-                  <p class="body-copy" id="webnovel-detail-description"></p>
-                  <p class="webnovel-card-meta" id="webnovel-detail-genres"></p>
-                  <p class="webnovel-card-meta" id="webnovel-detail-chapters"></p>
-                  <p class="webnovel-card-meta is-error" id="webnovel-detail-error" hidden></p>
-                  <div class="toolbar" id="webnovel-detail-links"></div>
-                  <div class="webnovel-card-actions" id="webnovel-detail-actions"></div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="workspace-modal" id="webnovel-debug-modal" hidden>
-            <div class="workspace-modal-card">
-              <button class="action-button workspace-modal-close" id="webnovel-debug-close">✕ Schließen</button>
-              <p class="panel-label">Debug-Log</p>
-              <h3>Webnovel-Diagnose</h3>
-              <p class="field-hint" id="webnovel-debug-path"></p>
-              <div class="toolbar">
-                <button class="action-button" id="webnovel-debug-copy">In Zwischenablage kopieren</button>
-                <button class="action-button" id="webnovel-debug-open">Log-Datei öffnen</button>
-                <button class="action-button" id="webnovel-debug-refresh">Aktualisieren</button>
-              </div>
-              <pre class="debug-log-pre" id="webnovel-debug-content"></pre>
-            </div>
-          </section>
-        </section>
-
-        <section class="view" data-view="mangas">
-          <section class="panel">
-            <p class="panel-label">Manga-Abos</p>
-            <h3>Manga per Link abonnieren</h3>
-            <div class="webnovel-subscribe-row">
-              <input
-                id="manga-url-input"
-                type="text"
-                placeholder="https://www.mangatown.com/manga/..."
-              />
-              <button class="action-button primary" id="manga-subscribe-btn">Abonnieren</button>
-              <button class="action-button" id="manga-check-all-btn">Jetzt alle prüfen</button>
-            </div>
-            <p class="field-hint" id="manga-sources-hint"></p>
-            <p class="field-hint" id="manga-feedback"></p>
-            <div class="webnovel-progress" id="manga-job-progress" hidden>
-              <p class="field-hint" id="manga-job-text"></p>
-              <div class="webnovel-progress-track">
-                <div class="webnovel-progress-bar" id="manga-job-bar"></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel">
-            <p class="panel-label">Einstellungen</p>
-            <div class="webnovel-subscribe-row">
-              <label class="field-hint" for="manga-delay-input">Pause zwischen Anfragen (ms)</label>
-              <input id="manga-delay-input" type="number" min="500" max="5000" step="100" value="1500" />
-              <label class="field-hint" for="manga-max-chapters">Max. Kapitel pro Durchlauf</label>
-              <input id="manga-max-chapters" type="number" min="1" max="2000" step="10" value="50" />
-            </div>
-            <p class="field-hint">
-              Ein Manga-Kapitel sind viele einzelne Bilder. Das Limit verhindert, dass ein Abo mit
-              tausenden Kapiteln den Rechner tagelang beschäftigt — der nächste Durchlauf macht dort
-              weiter, wo dieser aufgehört hat.
-            </p>
-          </section>
-
-          <section class="panel webnovel-library">
-            <div class="webnovel-toolbar">
-              <div class="webnovel-filters" id="manga-filters">
-                <button class="webnovel-chip is-active" data-manga-filter="all">Alle</button>
-                <button class="webnovel-chip" data-manga-filter="ongoing">Laufend</button>
-                <button class="webnovel-chip" data-manga-filter="completed">Abgeschlossen</button>
-                <button class="webnovel-chip" data-manga-filter="paused">Pausiert</button>
-                <button class="webnovel-chip" data-manga-filter="error">Fehler</button>
-                <button class="webnovel-chip" data-manga-filter="new">Neue Kapitel</button>
-                <button class="webnovel-chip" data-manga-filter="trash">Papierkorb</button>
-              </div>
-            </div>
-            <div class="stack webnovel-list" id="manga-list"></div>
-            <p class="body-copy" id="manga-list-empty">Noch keine Abos vorhanden.</p>
-          </section>
-
-          <section class="workspace-modal" id="manga-detail" hidden>
-            <div class="workspace-modal-card">
-              <button class="action-button workspace-modal-close" id="manga-detail-close">✕ Schließen</button>
-              <div class="webnovel-detail-grid">
-                <div class="webnovel-detail-side">
-                  <img id="manga-detail-cover" alt="Cover" hidden />
-                  <h3 id="manga-detail-title"></h3>
-                  <p class="webnovel-card-meta" id="manga-detail-author"></p>
-                </div>
-                <div class="webnovel-detail-main">
-                  <div id="manga-detail-badges"></div>
-                  <p class="body-copy" id="manga-detail-description"></p>
-                  <p class="webnovel-card-meta" id="manga-detail-genres"></p>
-                  <p class="webnovel-card-meta" id="manga-detail-chapters"></p>
-                  <p class="webnovel-card-meta is-error" id="manga-detail-error" hidden></p>
-                  <div class="toolbar" id="manga-detail-links"></div>
-                  <div class="webnovel-card-actions" id="manga-detail-actions"></div>
-                </div>
-              </div>
-            </div>
-          </section>
-        </section>
-
-        <section class="view" data-view="settings">
-          <div class="settings-tabs" id="settings-tabs">
-            <button class="settings-tab is-active" data-settings-tab="general">Allgemein</button>
-            <button class="settings-tab" data-settings-tab="folders">Ordnerstruktur</button>
-            <button class="settings-tab" data-settings-tab="webnovels">Webnovels</button>
-            <button class="settings-tab" data-settings-tab="info">Hinweise</button>
-          </div>
-          <div class="settings-pane is-active" data-settings-pane="general">
-            <div class="panel-grid single">
-<section class="panel">
-              <p class="panel-label">Lokale Vorgaben</p>
-              <h3>Portabel und verschiebbar</h3>
-              <ul class="list">
-                <li>Kein absoluter Pfadzwang im Vault.</li>
-                <li>Konfiguration bleibt lokal im Vault.</li>
-                <li>API-Schlüssel bleiben außerhalb des Repos.</li>
-              </ul>
-              <div class="stack">
-                <label class="field">
-                  <span>Vault-Pfad</span>
-                  <input
-                    id="vault-root-input"
-                    type="text"
-                    placeholder="/Pfad/zum/Vault"
-                  />
-                </label>
-                <div class="toolbar">
-                  <button class="action-button primary" id="vault-root-save">Speichern</button>
-                  <button class="action-button" id="vault-root-clear">Zurücksetzen</button>
-                </div>
-                <p class="field-hint" id="vault-root-hint">
-                  Leer lassen, dann versucht Fero den Vault automatisch zu finden.
-                </p>
-              </div>
-            </section>
-            </div>
-          </div>
-          <div class="settings-pane" data-settings-pane="folders">
-            <div class="panel-grid single">
-<section class="panel">
-              <p class="panel-label">Ordnerstruktur</p>
-              <h3>Zielpfade pro Medientyp</h3>
-              <p class="body-copy">
-                Platzhalter: {title}, {series}, {season}, {year}, {filename}.
-              </p>
-              <div class="folder-template-table">
-                <div class="folder-template-row table-head">
-                  <span>Medientyp</span>
-                  <span>Template</span>
-                </div>
-                <label class="folder-template-row">
-                  <span>Anime Serien</span>
-                  <input id="template-anime-tv" type="text" />
-                </label>
-                <label class="folder-template-row">
-                  <span>Anime Filme</span>
-                  <input id="template-anime-movie" type="text" />
-                </label>
-                <label class="folder-template-row">
-                  <span>Serien</span>
-                  <input id="template-series" type="text" />
-                </label>
-                <label class="folder-template-row">
-                  <span>Filme</span>
-                  <input id="template-film" type="text" />
-                </label>
-                <div class="toolbar">
-                  <button class="action-button primary" id="templates-save">Templates speichern</button>
-                  <button class="action-button" id="templates-reset">Standard</button>
-                </div>
-                <p class="field-hint" id="templates-hint">
-                  Änderungen wirken sofort auf die Zielvorschau und werden beim Import anwenden physisch verschoben.
-                </p>
-              </div>
-            </section>
-            </div>
-          </div>
-          <div class="settings-pane" data-settings-pane="webnovels">
-            <div class="panel-grid single">
-<section class="panel">
-              <p class="panel-label">Webnovel-Abos</p>
-              <h3>Automatische Prüfung &amp; EPUB-Ausgabe</h3>
-              <div class="stack">
-                <label class="check-field">
-                  <input type="checkbox" id="webnovel-check-on-start" />
-                  <span>Beim App-Start auf neue Kapitel prüfen</span>
-                </label>
-                <label class="check-field">
-                  <input type="checkbox" id="webnovel-periodic-enabled" />
-                  <span>Periodisch prüfen, solange die App läuft</span>
-                </label>
-                <label class="field">
-                  <span>Intervall (Minuten, mind. 15)</span>
-                  <input id="webnovel-interval-input" type="number" min="15" step="15" />
-                </label>
-                <label class="field">
-                  <span>Download-Pause zwischen Kapiteln (Sekunden, 0,5–5)</span>
-                  <input
-                    id="webnovel-delay-input"
-                    type="number"
-                    min="0.5"
-                    max="5"
-                    step="0.5"
-                  />
-                </label>
-                <label class="field">
-                  <span>Goodreads-Metadaten</span>
-                  <select id="webnovel-goodreads-mode">
-                    <option value="off">Aus</option>
-                    <option value="fill">Ergänzend (füllt nur Lücken)</option>
-                    <option value="override">Überschreibend (Goodreads gewinnt)</option>
-                  </select>
-                </label>
-                <label class="check-field">
-                  <input type="checkbox" id="webnovel-build-complete" />
-                  <span>Gesamt-EPUB pro Novel erzeugen</span>
-                </label>
-                <label class="check-field">
-                  <input type="checkbox" id="webnovel-build-batch" />
-                  <span>Batch-EPUB pro Abruf erzeugen (laufende Novels)</span>
-                </label>
-                <p class="field-hint">
-                  Beim Neuaufbau des Gesamt-EPUBs wird dessen Lesefortschritt zurückgesetzt.
-                  Zum Weiterlesen laufender Novels die Batch-EPUBs verwenden.
-                </p>
-              </div>
-            </section>
-            <section class="panel">
-              <p class="panel-label">Quellen</p>
-              <h3>Unterstützte Seiten &amp; Lesezeichen</h3>
-              <div class="stack" id="webnovel-sources"></div>
-              <p class="panel-label" style="margin-top: 1rem">Eigene Lesezeichen</p>
-              <div class="stack" id="webnovel-bookmarks"></div>
-              <div class="webnovel-blocklist-add">
-                <input id="webnovel-bookmark-label" type="text" placeholder="Name" />
-                <input id="webnovel-bookmark-url" type="text" placeholder="https://…" />
-                <button class="action-button" id="webnovel-bookmark-add">Hinzufügen</button>
-              </div>
-            </section>
-            <section class="panel">
-              <p class="panel-label">Blockliste</p>
-              <h3>Gesperrte Seiten</h3>
-              <p class="body-copy">
-                Diese Hosts werden weder abonniert noch geprüft (inkl. Subdomains).
-                Eingebaute Einträge lassen sich nicht entfernen.
-              </p>
-              <div class="stack" id="webnovel-blocklist"></div>
-              <div class="webnovel-blocklist-add">
-                <input id="webnovel-blocklist-host" type="text" placeholder="beispiel-seite.com" />
-                <input id="webnovel-blocklist-note" type="text" placeholder="Bemerkung (optional)" />
-                <button class="action-button" id="webnovel-blocklist-add-btn">Hinzufügen</button>
-              </div>
-              <p class="field-hint" id="webnovel-blocklist-feedback"></p>
-            </section>
-            </div>
-          </div>
-          <div class="settings-pane" data-settings-pane="info">
-            <div class="panel-grid single">
-<section class="panel">
-              <p class="panel-label">Import-Pipeline</p>
-              <h3>Vom Inbox-Ordner zur sauberen Struktur</h3>
-              <ul class="list">
-                <li>Relative Pfade werden beibehalten.</li>
-                <li>Unklare Einträge landen in der Review-Warteschlange.</li>
-                <li>Metadaten fließen in YAML oder NFO Sidecars.</li>
-                <li>Duplikate werden vor dem Verschieben markiert.</li>
-              </ul>
-            </section>
-
-            <section class="panel">
-              <p class="panel-label">APIs</p>
-              <h3>Frühe Provider-Anbindung</h3>
-              <ul class="list">
-                <li>AniList ist als erster Workflow-Anker vorgesehen.</li>
-                <li>Weitere Quellen folgen schrittweise.</li>
-                <li>User-Eingaben überschreiben API und AI.</li>
-              </ul>
-            </section>
-            </div>
-          </div>
-        </section>
-
-        <section class="view" data-view="trash">
-          <section class="panel">
-            <div class="webnovel-toolbar">
-              <div>
-                <p class="panel-label">Papierkorb</p>
-                <h3>Gelöschte Dateien</h3>
-              </div>
-              <div class="webnovel-card-actions">
-                <button class="action-button" id="trash-refresh">Aktualisieren</button>
-                <button class="action-button danger" id="trash-empty">Papierkorb leeren</button>
-              </div>
-            </div>
-            <p class="body-copy">
-              Gelöschte Dateien liegen mit ihrer ursprünglichen Struktur unter
-              <code>.trash/</code> im Vault. Wiederherstellen bringt Datei und Sidecar zurück.
-              Für gelöschte Webnovel-Abos siehe den Filter „Papierkorb“ im Webnovels-Tab.
-            </p>
-            <div class="stack" id="trash-list"></div>
-            <p class="body-copy" id="trash-empty-hint">Der Papierkorb ist leer.</p>
-          </section>
-        </section>
-      </main>
-
-      <aside class="inspector">
-        <button class="action-button inspector-toggle" id="inspector-toggle">
-          Properties ausblenden
-        </button>
-
-        <section class="panel tight inspector-panel">
-          <div class="inspector-header">
-            <div>
-              <p class="panel-label">Properties</p>
-              <h3 id="inspector-title">Kein Eintrag ausgewählt</h3>
-            </div>
-            <button class="action-button icon-button" id="inspector-edit-toggle" aria-label="Bearbeiten">✎</button>
-          </div>
-          <div class="inspector-actions">
-            <button class="action-button primary" id="inspector-play" hidden>▶ Abspielen</button>
-            <button class="action-button" id="inspector-add-playlist" hidden>+ Zur Wiedergabeliste</button>
-            <button class="action-button" id="inspector-fetch-metadata">AniList abrufen</button>
-            <button class="action-button" id="inspector-not-duplicate">Kein Duplikat</button>
-            <button class="action-button danger" id="inspector-trash">In Papierkorb</button>
-          </div>
-          <div class="inspector-edit" id="inspector-edit">
-            <label class="property-edit-row">
-              <span>Titel</span>
-              <input id="inspector-name" type="text" />
-            </label>
-            <label class="property-edit-row">
-              <span>Medientyp</span>
-              <select id="inspector-media-type"></select>
-            </label>
-            <label class="property-edit-row">
-              <span>Jahr</span>
-              <input id="inspector-year" type="number" min="1900" max="2100" />
-            </label>
-            <label class="property-edit-row">
-              <span>Status</span>
-              <select id="inspector-status"></select>
-            </label>
-            <div class="property-edit-row property-edit-tags">
-              <span>Tags</span>
-              <div class="tag-editor">
-                <div class="tag-editor-chips" id="inspector-tags-chips"></div>
-                <input
-                  id="inspector-tags-input"
-                  type="text"
-                  list="inspector-tags-datalist"
-                  placeholder="Tag hinzufügen (Enter)"
-                />
-                <datalist id="inspector-tags-datalist"></datalist>
-              </div>
-            </div>
-            <button class="action-button primary" id="inspector-apply">Änderungen übernehmen</button>
-          </div>
-          <div class="api-feedback" id="inspector-api-feedback"></div>
-          <div class="property-list" id="inspector-properties"></div>
-          <button class="property-add-button" id="inspector-property-add-toggle">+ Eigenschaft hinzufügen</button>
-          <div class="property-add" id="inspector-property-add-form">
-            <input id="inspector-property-key" type="text" placeholder="property_name" />
-            <select id="inspector-property-type">
-              <option value="text">Text</option>
-              <option value="number">Nummer</option>
-              <option value="rating">Bewertung</option>
-              <option value="date">Datum</option>
-              <option value="tags">Tags</option>
-              <option value="link">Link</option>
-              <option value="boolean">Ja/Nein</option>
-            </select>
-            <input id="inspector-property-value" type="text" placeholder="Wert" />
-            <button class="action-button" id="inspector-property-add">Property hinzufügen</button>
-          </div>
-        </section>
-
-        <section class="panel tight inspector-panel yaml-panel" id="inspector-yaml-panel">
-          <p class="panel-label">YAML</p>
-          <textarea class="yaml-editor" id="inspector-yaml" spellcheck="false"></textarea>
-          <div class="toolbar">
-            <button class="action-button primary" id="inspector-yaml-save">YAML speichern</button>
-            <button class="action-button" id="inspector-yaml-reset">Zurücksetzen</button>
-          </div>
-          <p class="field-hint" id="inspector-yaml-hint">
-            Änderungen werden zunächst lokal gespeichert.
-          </p>
-        </section>
-      </aside>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">F</span>
+      <span class="brand-name">Fero</span>
     </div>
 
-    <section class="app-modal" id="app-modal" hidden>
-      <section class="panel modal-card" id="trash-dialog" hidden>
-        <p class="panel-label">Papierkorb</p>
-        <h3 id="trash-dialog-title">Eintrag entfernen</h3>
-        <p class="body-copy" id="trash-dialog-body">
-          Der ausgewählte Eintrag wird erst in den App-Papierkorb verschoben.
-        </p>
-        <div class="toolbar">
-          <button class="action-button danger" id="trash-dialog-confirm">In Papierkorb verschieben</button>
-          <button class="action-button" id="trash-dialog-cancel">Abbrechen</button>
-        </div>
-      </section>
+    <button class="nav-item is-active" data-view="subscriptions">
+      <span class="nav-label">Abos</span>
+      <span class="nav-count" id="nav-count-subscriptions"></span>
+    </button>
+    <button class="nav-item" data-view="settings">
+      <span class="nav-label">Einstellungen</span>
+    </button>
+    <button class="nav-item" data-view="log">
+      <span class="nav-label">Protokoll</span>
+    </button>
 
-      <section class="panel modal-card anilist-modal" id="anilist-dialog" hidden>
-        <p class="panel-label">AniList</p>
-        <h3 id="anilist-dialog-title">Treffer auswählen</h3>
+    <div class="sidebar-foot">
+      <button class="action primary block" id="check-all">Alle prüfen</button>
+      <p class="sidebar-hint" id="target-hint"></p>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div class="job-banner" id="job-banner" hidden>
+      <div class="job-text">
+        <strong id="job-title">Prüfe …</strong>
+        <span id="job-detail"></span>
+      </div>
+      <div class="job-bar"><div class="job-bar-fill" id="job-bar-fill"></div></div>
+    </div>
+
+    <!-- Abo-Liste -->
+    <section class="view is-active" data-view="subscriptions">
+      <header class="view-head">
+        <h1>Abos</h1>
+        <div class="head-actions">
+          <input
+            type="search"
+            id="filter-input"
+            class="input search"
+            placeholder="Titel oder Quelle filtern"
+          />
+          <select id="kind-filter" class="input">
+            <option value="">Alle Typen</option>
+          </select>
+          <button class="action primary" id="add-open">Abo hinzufügen</button>
+        </div>
+      </header>
+
+      <div class="add-panel" id="add-panel" hidden>
         <label class="field">
-          <span>Suchbegriff oder Titel</span>
-          <input id="anilist-dialog-query" type="text" />
+          <span>URL der Übersichtsseite</span>
+          <input type="url" id="add-url" class="input" placeholder="https://…" />
         </label>
-        <div class="toolbar">
-          <button class="action-button primary" id="anilist-dialog-search">Suchen</button>
-          <button class="action-button" id="anilist-dialog-cancel">Abbrechen</button>
-        </div>
-        <div class="api-feedback" id="anilist-dialog-feedback"></div>
-        <div class="anilist-results" id="anilist-dialog-results"></div>
-      </section>
-
-      <section class="panel modal-card" id="confirm-dialog" hidden>
-        <p class="panel-label" id="confirm-dialog-label">Bestätigen</p>
-        <h3 id="confirm-dialog-title">Bist du sicher?</h3>
-        <p class="body-copy" id="confirm-dialog-body"></p>
-        <div class="toolbar">
-          <button class="action-button primary" id="confirm-dialog-confirm">Fortfahren</button>
-          <button class="action-button" id="confirm-dialog-cancel">Abbrechen</button>
-        </div>
-      </section>
-
-      <section class="panel modal-card" id="conflict-dialog" hidden>
-        <p class="panel-label">Konflikte</p>
-        <h3 id="conflict-dialog-title">Dateien existieren bereits</h3>
-        <p class="body-copy" id="conflict-dialog-body">
-          Am Zielort existieren bereits gleichnamige Dateien. Bitte wähle, wie verfahren werden soll.
-        </p>
-        <div class="conflict-list" id="conflict-dialog-list"></div>
-        <div class="toolbar">
-          <button class="action-button danger" id="conflict-dialog-overwrite">Überschreiben (alte löschen)</button>
-          <button class="action-button" id="conflict-dialog-skip">Konflikte überspringen</button>
-          <button class="action-button" id="conflict-dialog-cancel">Abbrechen</button>
-        </div>
-      </section>
-
-      <section class="panel modal-card" id="playlist-pick-dialog" hidden>
-        <p class="panel-label">Wiedergabeliste</p>
-        <h3>Zur Wiedergabeliste hinzufügen</h3>
-        <p class="body-copy" id="playlist-pick-file"></p>
-        <div class="stack" id="playlist-pick-list"></div>
         <label class="field">
-          <span>Oder neue Liste erstellen</span>
-          <input id="playlist-pick-new-name" type="text" placeholder="Name der neuen Liste" />
+          <span>Medientyp</span>
+          <select id="add-kind" class="input"></select>
         </label>
-        <div class="toolbar">
-          <button class="action-button primary" id="playlist-pick-create">Erstellen &amp; hinzufügen</button>
-          <button class="action-button" id="playlist-pick-cancel">Abbrechen</button>
+        <div class="row">
+          <button class="action primary" id="add-submit">Abonnieren</button>
+          <button class="action" id="add-cancel">Abbrechen</button>
         </div>
-      </section>
+        <p class="feedback" id="add-feedback"></p>
+      </div>
 
-      <section class="panel modal-card" id="playlist-create-dialog" hidden>
-        <p class="panel-label">Neue Playlist</p>
-        <h3>Playlist erstellen</h3>
-        <label class="field">
-          <span>Name</span>
-          <input id="playlist-create-name" type="text" placeholder="z.B. Meine Lieblingsfilme" />
-        </label>
-        <div class="toolbar">
-          <button class="action-button primary" id="playlist-create-confirm">Erstellen</button>
-          <button class="action-button" id="playlist-create-cancel">Abbrechen</button>
-        </div>
-      </section>
-
-      <section class="panel modal-card image-modal" id="image-dialog" hidden>
-        <p class="panel-label">Vorschau</p>
-        <h3 id="image-dialog-title">Bildansicht</h3>
-        <div class="image-modal-stage">
-          <img id="image-dialog-preview" alt="Bildvorschau" />
-        </div>
-        <div class="toolbar">
-          <button class="action-button" id="image-dialog-close">Schließen</button>
-        </div>
-      </section>
-
+      <div class="cards" id="subscription-list"></div>
+      <p class="empty" id="subscription-empty" hidden></p>
     </section>
 
-    <!-- Media player — fullscreen overlay, lives outside app-modal so it is
-         not affected when app-modal is hidden to dismiss other dialogs. -->
-    <section class="player-modal" id="player-dialog" hidden>
-      <div class="player-header">
-        <span class="player-title" id="player-title">-</span>
-        <button class="action-button icon-button" id="player-close" title="Schließen">✕</button>
-      </div>
+    <!-- Abo-Detail -->
+    <section class="view" data-view="detail">
+      <header class="view-head">
+        <button class="action ghost" id="detail-back">← Zurück</button>
+        <h1 id="detail-title">Abo</h1>
+      </header>
 
-      <!-- Video stage (hidden for audio-only) -->
-      <div class="player-stage" id="player-stage">
-        <video id="player-video" preload="metadata"></video>
-      </div>
-
-      <!-- PDF stage (shown for .pdf files) -->
-      <div class="player-pdf-stage" id="player-pdf-stage" hidden>
-        <iframe id="player-pdf-frame" title="PDF-Ansicht"></iframe>
-      </div>
-
-      <!-- Manga/image stage (shown for image sequences) -->
-      <div class="player-manga-stage" id="player-manga-stage" hidden>
-        <button class="action-button icon-button player-manga-nav" id="player-manga-prev" title="Zurück">‹</button>
-        <img id="player-manga-img" alt="Seite" />
-        <button class="action-button icon-button player-manga-nav" id="player-manga-next" title="Weiter">›</button>
-        <div class="player-manga-counter" id="player-manga-counter">1 / 1</div>
-      </div>
-
-      <!-- Audio-only placeholder (shown instead of stage for audio) -->
-      <div class="player-audio-art" id="player-audio-art" hidden>
-        <img id="player-cover-art" alt="" />
-      </div>
-
-      <!-- Hidden audio element for audio-only files -->
-      <audio id="player-audio" preload="metadata"></audio>
-
-      <!-- Subtitle track: auto-loaded when .srt companion found -->
-      <div class="player-subtitle-display" id="player-subtitle-display"></div>
-
-      <div class="player-controls">
-        <div class="player-progress-row">
-          <span class="player-time" id="player-time-current">0:00</span>
-          <input class="player-seek" type="range" id="player-seek" min="0" max="1000" value="0" step="1" />
-          <span class="player-time" id="player-time-total">—:——</span>
+      <div class="detail-grid">
+        <div class="panel">
+          <p class="panel-label">Übersicht</p>
+          <dl class="facts" id="detail-facts"></dl>
+          <p class="description" id="detail-description"></p>
+          <div class="chips" id="detail-genres"></div>
         </div>
-        <div class="player-buttons-row">
-          <button class="action-button icon-button player-btn-skip" id="player-skip-back" title="−10 Sek.">⏮</button>
-          <button class="action-button icon-button player-btn-main" id="player-play-pause" title="Wiedergabe">▶</button>
-          <button class="action-button icon-button player-btn-skip" id="player-skip-fwd" title="+30 Sek.">⏭</button>
-          <select class="action-button player-speed" id="player-speed" title="Geschwindigkeit">
-            <option value="0.5">0.5×</option>
-            <option value="0.75">0.75×</option>
-            <option value="1" selected>1×</option>
-            <option value="1.25">1.25×</option>
-            <option value="1.5">1.5×</option>
-            <option value="2">2×</option>
-          </select>
-          <select class="action-button player-sleep" id="player-sleep-timer" title="Sleep-Timer">
-            <option value="0">Kein Timer</option>
-            <option value="15">15 Min.</option>
-            <option value="30">30 Min.</option>
-            <option value="45">45 Min.</option>
-            <option value="60">60 Min.</option>
-            <option value="90">90 Min.</option>
-          </select>
-          <select class="action-button player-subtitle" id="player-subtitle-select" title="Untertitel" hidden>
-            <option value="">Untertitel: Aus</option>
-          </select>
-          <button class="action-button" id="player-open-system" title="Mit System-App öffnen">Mit System öffnen</button>
+
+        <div class="panel">
+          <p class="panel-label">Ziel</p>
+          <p class="hint" id="detail-target-current"></p>
+          <div class="row">
+            <button class="action" id="detail-pick-target">Eigenen Ordner wählen</button>
+            <button class="action ghost" id="detail-clear-target">Standard verwenden</button>
+          </div>
+          <p class="feedback" id="detail-target-feedback"></p>
+        </div>
+
+        <div class="panel">
+          <p class="panel-label">Aktionen</p>
+          <div class="row wrap">
+            <button class="action primary" id="detail-check">Jetzt prüfen</button>
+            <button class="action" id="detail-open">Im Finder zeigen</button>
+            <button class="action" id="detail-source">Quelle öffnen</button>
+            <button class="action danger" id="detail-delete">Abo löschen</button>
+          </div>
+          <p class="feedback" id="detail-feedback"></p>
         </div>
       </div>
     </section>
 
-    <script src="/app.js" defer></script>
-  </body>
-</html>
+    <!-- Einstellungen -->
+    <section class="view" data-view="settings">
+      <header class="view-head"><h1>Einstellungen</h1></header>
+
+      <div class="panel">
+        <p class="panel-label">Datenordner</p>
+        <p class="hint">
+          Hier liegen Abos, Einstellungen, Sitzungen und der Kapitel-Zwischenspeicher —
+          nicht die fertigen Dateien.
+        </p>
+        <p class="mono" id="data-dir"></p>
+        <p class="feedback" id="data-dir-problem"></p>
+      </div>
+
+      <div class="panel">
+        <p class="panel-label">Zielordner pro Medientyp</p>
+        <p class="hint">
+          Ein hier gesetzter Ordner <em>ist</em> der Medienordner — es wird kein weiteres
+          Unterverzeichnis angelegt. Ein einzelnes Abo kann das überschreiben.
+        </p>
+        <div id="target-rows"></div>
+      </div>
+
+      <div class="panel">
+        <p class="panel-label">Ausweichordner</p>
+        <p class="hint">
+          Wird nur verwendet, wenn weder das Abo noch sein Medientyp ein Ziel vorgibt.
+          Da ihn alle Typen teilen, wird darunter je ein Ordner pro Typ angelegt.
+        </p>
+        <div class="row">
+          <span class="mono grow" id="fallback-path">nicht gesetzt</span>
+          <button class="action" data-target-kind="" data-role="pick">Wählen</button>
+          <button class="action ghost" data-target-kind="" data-role="clear">Entfernen</button>
+        </div>
+      </div>
+
+      <p class="feedback" id="settings-feedback"></p>
+    </section>
+
+    <!-- Protokoll -->
+    <section class="view" data-view="log">
+      <header class="view-head">
+        <h1>Protokoll</h1>
+        <div class="head-actions">
+          <button class="action" id="log-reload">Neu laden</button>
+          <button class="action" id="log-open">Datei öffnen</button>
+        </div>
+      </header>
+      <pre class="log" id="log-body"></pre>
+    </section>
+  </main>
+</div>
+
+<div class="status-strip" id="status-strip" hidden></div>
+
+<script src="app.js"></script>

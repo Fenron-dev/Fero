@@ -205,7 +205,9 @@ pub(crate) struct MangaSubscriptionSummary {
     anilist_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
-    /// Vault-relative path of the cached cover image, when one exists.
+    /// Delivery target set for this subscription alone, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_dir: Option<String>,
     /// Whether a cached cover exists in the series folder.
     has_cover: bool,
     completed: bool,
@@ -238,6 +240,7 @@ impl MangaSubscriptionSummary {
             tags: subscription.tags.clone(),
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
+            target_dir: subscription.target_dir.clone(),
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
@@ -301,6 +304,7 @@ pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SubscribeRequest {
     url: String,
     #[serde(default)]
@@ -563,6 +567,7 @@ pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct IdRequest {
     id: String,
     #[serde(default)]
@@ -645,6 +650,7 @@ pub(crate) fn build_purge_response(body: &[u8]) -> MangaSimpleResponse {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UpdateRequest {
     id: String,
     #[serde(default)]
@@ -682,6 +688,11 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
     }
     if let Some(enabled) = req.enabled {
         subscription.enabled = enabled;
+    }
+    if req.clear_target_dir {
+        subscription.target_dir = None;
+    } else if let Some(target) = req.target_dir {
+        subscription.target_dir = Some(target);
     }
 
     match save_subscription(&ws.store, &subscription) {
