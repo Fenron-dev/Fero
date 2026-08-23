@@ -98,9 +98,9 @@ fn write_private_file(path: &Path, contents: &str) -> std::io::Result<()> {
     file.write_all(contents.as_bytes())
 }
 
-const INDEX_HTML: &str = include_str!("../dist/index.html");
-const APP_JS: &str = include_str!("../dist/app.js");
-const STYLES_CSS: &str = include_str!("../dist/styles.css");
+const INDEX_HTML: &str = include_str!("../../dist/index.html");
+const APP_JS: &str = include_str!("../../dist/app.js");
+const STYLES_CSS: &str = include_str!("../../dist/styles.css");
 
 /// Starts the Tauri desktop shell.
 pub(crate) fn run() -> Result<()> {
