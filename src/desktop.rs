@@ -2250,7 +2250,7 @@ fn build_batch_epub(novel_dir: &Path, subscription: &Subscription, indices: &[u3
         language: "en".to_string(),
         identifier: format!("{}#batch-{min}-{max}", subscription.url),
         description: subscription.description.clone(),
-        cover: load_novel_cover(&novel_dir),
+        cover: load_novel_cover(novel_dir),
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
@@ -2280,7 +2280,7 @@ fn build_complete_epub(novel_dir: &Path, subscription: &Subscription) -> Result<
         language: "en".to_string(),
         identifier: subscription.url.clone(),
         description: subscription.description.clone(),
-        cover: load_novel_cover(&novel_dir),
+        cover: load_novel_cover(novel_dir),
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
