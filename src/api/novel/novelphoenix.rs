@@ -91,9 +91,7 @@ fn chapters_base_url(novel_url: &str) -> String {
 fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
     let title = first_text(html, "h1.novel-title")
         .or_else(|| first_text(html, "h1"))
-        .ok_or_else(|| {
-            FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}"))
-        })?;
+        .ok_or_else(|| FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}")))?;
 
     // Genre links; nav entries ("Latest Novels" …) don't use /genre/ URLs.
     let genres = collect_link_texts(html, "a[href*='/genre/']");

@@ -940,9 +940,7 @@ impl Workspace {
         let own = subscription.target_dir.as_deref().map(Path::new);
         match resolve_target(own, kind, &self.targets, &self.store) {
             TargetResolution::Resolved { parent, .. } => Ok(parent),
-            TargetResolution::NeedsChoice { reason, .. } => {
-                Err(FeroError::InvalidTarget(reason))
-            }
+            TargetResolution::NeedsChoice { reason, .. } => Err(FeroError::InvalidTarget(reason)),
         }
     }
 }

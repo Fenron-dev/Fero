@@ -316,9 +316,8 @@ pub fn save_subscription(
     let dir = store_dir(system_dir, store);
     fs::create_dir_all(&dir).map_err(FeroError::from)?;
     let path = subscription_file_path(system_dir, store, &subscription.id);
-    let json = serde_json::to_string_pretty(subscription).map_err(|e| {
-        FeroError::Serialization(format!("subscription JSON serialize error: {e}"))
-    })?;
+    let json = serde_json::to_string_pretty(subscription)
+        .map_err(|e| FeroError::Serialization(format!("subscription JSON serialize error: {e}")))?;
     fs::write(&path, json).map_err(FeroError::from)?;
     Ok(())
 }

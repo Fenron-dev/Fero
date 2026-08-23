@@ -208,9 +208,7 @@ fn parse_classic_wordpress(page_url: &str, html: &Html) -> Result<NovelInfo> {
 
     let title = first_text(html, "h1.entry-title")
         .or_else(|| first_text(html, "h1"))
-        .ok_or_else(|| {
-            FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}"))
-        })?;
+        .ok_or_else(|| FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}")))?;
 
     let link_selector = Selector::parse("div.entry-content a[href]")
         .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;

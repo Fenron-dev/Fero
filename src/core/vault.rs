@@ -112,9 +112,7 @@ impl Vault {
         let root = root.into();
 
         if root.as_os_str().is_empty() {
-            return Err(FeroError::InvalidTarget(
-                "vault root is empty".to_string(),
-            ));
+            return Err(FeroError::InvalidTarget("vault root is empty".to_string()));
         }
 
         Ok(Self { root })
