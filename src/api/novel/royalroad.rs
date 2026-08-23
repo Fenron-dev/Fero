@@ -16,7 +16,7 @@ use super::{
     absolutize, extract_content, sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo,
     NovelSource, PoliteClient,
 };
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Content selectors for chapter pages, in priority order.
 const CHAPTER_CONTENT_SELECTORS: [&str; 2] =

@@ -50,7 +50,7 @@ use crate::desktop::{
     debug_log, extract_query_value, resolve_workspace, safe_folder_segment, sanitize_path_segment,
     Workspace,
 };
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 // ---------------------------------------------------------------------------
 // Job registry

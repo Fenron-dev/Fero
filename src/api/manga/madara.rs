@@ -25,7 +25,7 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Madara-theme adapter.
 pub struct MadaraSource;

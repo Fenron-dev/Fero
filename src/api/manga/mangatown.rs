@@ -24,7 +24,7 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// MangaTown adapter.
 pub struct MangaTownSource;

@@ -6,7 +6,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 const DEFAULT_ENDPOINT: &str = "https://graphql.anilist.co";
 const ANILIST_MEDIA_QUERY: &str = r#"

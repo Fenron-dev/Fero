@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use scraper::{Html, Selector};
 
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 // ---------------------------------------------------------------------------
 // Shared types

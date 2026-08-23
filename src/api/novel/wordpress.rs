@@ -22,7 +22,7 @@ use super::{
     absolutize, extract_content, host_of, looks_like_chapter_text, sanitize_to_xhtml,
     ChapterContent, ChapterRef, NovelInfo, NovelSource, PoliteClient,
 };
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Content selectors for chapter pages, in priority order.
 /// Fictioneer (`#chapter-content`) first, then classic WordPress bodies.

@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::api::novel::PoliteClient;
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Autocomplete endpoint; `q` is appended URL-encoded.
 const AUTOCOMPLETE_URL: &str = "https://www.goodreads.com/book/auto_complete?format=json&q=";

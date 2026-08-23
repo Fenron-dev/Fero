@@ -36,7 +36,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::core::epub::escape_xml;
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Width of the zero-padded page number in archive entry names.
 const PAGE_NUMBER_WIDTH: usize = 4;

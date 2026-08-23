@@ -20,7 +20,7 @@
 use scraper::{Html, Selector};
 
 use super::{sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo, NovelSource, PoliteClient};
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// NovelArrow source adapter (browser-window routed).
 pub struct NovelArrowSource;

@@ -22,7 +22,7 @@ use super::{
     absolutize, host_of, looks_like_chapter_text, sanitize_to_xhtml, ChapterContent, ChapterRef,
     NovelInfo, NovelSource, PoliteClient,
 };
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Candidate content selectors for chapter pages.
 const CONTENT_CANDIDATES: [&str; 6] = [

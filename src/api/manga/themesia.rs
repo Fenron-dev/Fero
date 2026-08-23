@@ -28,7 +28,7 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Themesia-theme adapter.
 pub struct ThemesiaSource;

@@ -28,7 +28,7 @@ use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOu
 use crate::deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
 };
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 use serde::{Deserialize, Serialize};
 use tauri::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
 use tauri::Manager;

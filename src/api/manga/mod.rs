@@ -37,7 +37,7 @@ pub mod themesia;
 pub mod webtoons;
 
 use crate::api::novel::PoliteClient;
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 // ---------------------------------------------------------------------------
 // Shared types

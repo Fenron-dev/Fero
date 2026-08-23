@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Directory name used for the portable data folder next to the application.
 const PORTABLE_DIR_NAME: &str = "Fero-Daten";

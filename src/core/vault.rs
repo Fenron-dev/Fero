@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 const SYSTEM_DIR: &str = ".fero";
 const INBOX_DIR: &str = "Inbox";

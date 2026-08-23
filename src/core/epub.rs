@@ -23,7 +23,7 @@ use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// One chapter to embed into the EPUB.
 #[derive(Debug, Clone)]

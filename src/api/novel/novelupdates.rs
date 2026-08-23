@@ -22,7 +22,7 @@ use super::{
     absolutize, generic::extract_best_content, ChapterContent, ChapterRef, NovelInfo, NovelSource,
     PoliteClient,
 };
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// NovelUpdates radar adapter.
 pub struct NovelUpdatesSource;

@@ -34,7 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 // ---------------------------------------------------------------------------
 // Data types

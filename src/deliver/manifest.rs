@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::deliver::targets::MediaKind;
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// File name of the manifest inside a work folder.
 pub const MANIFEST_FILE: &str = "fero.info.json";

@@ -25,7 +25,7 @@ use scraper::{Html, Selector};
 
 use super::{tidy_text, MangaChapterRef, MangaInfo, MangaSource, PageImage};
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Referer sent with every page-image request.
 const IMAGE_REFERER: &str = "https://www.webtoons.com/";

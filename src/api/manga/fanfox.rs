@@ -31,7 +31,7 @@ use super::{
     MangaSource, PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, FeroError};
+use crate::error::{FeroError, Result};
 
 /// Header that reveals the complete chapter list.
 const ADULT_HEADERS: [(&str, &str); 1] = [("Cookie", "isAdult=1")];
