@@ -20,8 +20,8 @@ pub use core::webnovel::{
     KnownChapter, Subscription,
 };
 pub use deliver::targets::{
-    resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution,
-    TargetSettings, TargetSource,
+    resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
+    TargetSource,
 };
 pub use error::{Result, VaultError};
 pub use media::{

@@ -45,7 +45,8 @@ pub enum MediaKind {
 
 impl MediaKind {
     /// Every kind, in the order the settings UI should show them.
-    pub const ALL: &'static [MediaKind] = &[MediaKind::Webnovel, MediaKind::Manga, MediaKind::Podcast];
+    pub const ALL: &'static [MediaKind] =
+        &[MediaKind::Webnovel, MediaKind::Manga, MediaKind::Podcast];
 
     /// Stable identifier used as the settings key and in the HTTP API.
     ///
@@ -374,10 +375,7 @@ pub fn resolve_target(
 
     TargetResolution::NeedsChoice {
         suggestion,
-        reason: format!(
-            "Für {} ist noch kein Zielordner festgelegt.",
-            kind.label()
-        ),
+        reason: format!("Für {} ist noch kein Zielordner festgelegt.", kind.label()),
     }
 }
 
@@ -464,7 +462,10 @@ mod tests {
         match resolved {
             TargetResolution::NeedsChoice { suggestion, reason } => {
                 assert_eq!(suggestion, dir.join("Downloads").join("Podcasts"));
-                assert!(reason.contains("Podcasts"), "reason names the kind: {reason}");
+                assert!(
+                    reason.contains("Podcasts"),
+                    "reason names the kind: {reason}"
+                );
             }
             other => panic!("expected NeedsChoice, got {other:?}"),
         }
