@@ -22,8 +22,8 @@ use crate::core::webnovel::{
     save_subscription, save_user_blocklist, trash_subscription, unix_now, BlocklistEntry,
     KnownChapter, Subscription,
 };
-use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOutcome};
 use crate::deliver::manifest;
+use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOutcome};
 use crate::deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
 };
@@ -136,10 +136,9 @@ fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         ),
         "/styles.css" => response(StatusCode::OK, "text/css; charset=utf-8", STYLES_CSS),
         "/api/targets" => json_response(StatusCode::OK, &build_targets_response()),
-        "/api/targets/save" => json_response(
-            StatusCode::OK,
-            &build_save_targets_response(request.body()),
-        ),
+        "/api/targets/save" => {
+            json_response(StatusCode::OK, &build_save_targets_response(request.body()))
+        }
         "/api/anilist-search" => json_response(
             StatusCode::OK,
             &build_anilist_search_response(request.uri().query()),
@@ -935,7 +934,9 @@ impl Workspace {
         let own = subscription.target_dir.as_deref().map(Path::new);
         match resolve_target(own, kind, &self.targets, &self.store) {
             TargetResolution::Resolved { parent, .. } => Ok(parent),
-            TargetResolution::NeedsChoice { reason, .. } => Err(VaultError::InvalidVaultPath(reason)),
+            TargetResolution::NeedsChoice { reason, .. } => {
+                Err(VaultError::InvalidVaultPath(reason))
+            }
         }
     }
 }
@@ -992,10 +993,7 @@ fn build_targets_response() -> TargetsResponse {
         DataDir::Chosen(path) => (Some(path.display().to_string()), None, false),
         DataDir::NeedsSetup { reason, .. } => (None, Some(reason.clone()), false),
     };
-    let settings = data
-        .path()
-        .map(load_target_settings)
-        .unwrap_or_default();
+    let settings = data.path().map(load_target_settings).unwrap_or_default();
 
     TargetsResponse {
         data_dir,
