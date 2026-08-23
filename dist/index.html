@@ -95,6 +95,22 @@
         </div>
 
         <div class="panel">
+          <p class="panel-label">Zugang zur Quelle</p>
+          <p class="hint">
+            Manche Seiten verlangen eine Anmeldung oder eine Cloudflare-Prüfung.
+            Beides passiert in einem eigenen Fenster; die Sitzung bleibt danach
+            erhalten.
+          </p>
+          <p class="hint" id="detail-login-state"></p>
+          <div class="row wrap">
+            <button class="action" id="detail-login">Anmelden</button>
+            <button class="action" id="detail-solve">Cloudflare-Prüfung öffnen</button>
+            <button class="action ghost" id="detail-logout">Abmelden</button>
+          </div>
+          <p class="feedback" id="detail-login-feedback"></p>
+        </div>
+
+        <div class="panel">
           <p class="panel-label">Aktionen</p>
           <div class="row wrap">
             <button class="action primary" id="detail-check">Jetzt prüfen</button>

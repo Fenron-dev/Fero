@@ -269,6 +269,8 @@ function openDetail(id) {
   renderDetailTarget(item);
   setFeedback($("detail-feedback"), "");
   setFeedback($("detail-target-feedback"), "");
+  setFeedback($("detail-login-feedback"), "");
+  refreshLoginState();
   showView("detail");
 }
 
@@ -313,6 +315,107 @@ $("detail-clear-target").addEventListener("click", async () => {
     setFeedback($("detail-target-feedback"), "Wieder auf Standard gesetzt.", "ok");
   } catch (error) {
     setFeedback($("detail-target-feedback"), error.message, "error");
+  }
+});
+
+/* Login- und Cloudflare-Fenster.
+ *
+ * Beide laufen in einem sichtbaren Fremdfenster; das Backend hält den Zustand
+ * pro Host. Nach dem Öffnen wird gepollt, bis er terminal ist — ein Wechsel
+ * passiert erst, wenn der Nutzer im Fenster fertig ist. */
+
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch (error) {
+    return "";
+  }
+}
+
+async function refreshLoginState() {
+  const item = currentItem();
+  const node = $("detail-login-state");
+  if (!item) return;
+  const host = hostOf(item.url);
+  try {
+    const data = await api(`webnovel/login-status?host=${encodeURIComponent(host)}`);
+    node.textContent = data.loggedIn
+      ? `Angemeldet bei ${host}.`
+      : `Keine gespeicherte Sitzung für ${host}.`;
+    $("detail-logout").disabled = !data.loggedIn;
+  } catch (error) {
+    node.textContent = "";
+  }
+}
+
+/** Pollt einen Host-Zustand, bis er nicht mehr `pending` ist. */
+function pollHostState(path, host, node, done) {
+  const timer = setInterval(async () => {
+    try {
+      const data = await api(`${path}?host=${encodeURIComponent(host)}`);
+      if (data.state === "pending" || data.state === "running") return;
+      clearInterval(timer);
+      done(data);
+    } catch (error) {
+      clearInterval(timer);
+      setFeedback(node, error.message, "error");
+    }
+  }, 1200);
+}
+
+$("detail-login").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-login-feedback");
+  const host = hostOf(item.url);
+  try {
+    setFeedback(node, "Fenster wird geöffnet …");
+    await post("webnovel/login", { host });
+    setFeedback(node, "Bitte im geöffneten Fenster anmelden.");
+    pollHostState("webnovel/login-status", host, node, (data) => {
+      setFeedback(
+        node,
+        data.loggedIn ? "Anmeldung gespeichert." : data.message || "Nicht angemeldet.",
+        data.loggedIn ? "ok" : "error"
+      );
+      refreshLoginState();
+    });
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+});
+
+$("detail-solve").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-login-feedback");
+  try {
+    setFeedback(node, "Fenster wird geöffnet …");
+    const result = await post("webnovel/solve", { url: item.url });
+    const host = result.host || hostOf(item.url);
+    setFeedback(node, "Bitte die Prüfung im geöffneten Fenster abschliessen.");
+    pollHostState("webnovel/solve-status", host, node, (data) => {
+      setFeedback(
+        node,
+        data.state === "solved" ? "Prüfung bestanden." : data.message || "Nicht bestanden.",
+        data.state === "solved" ? "ok" : "error"
+      );
+    });
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+});
+
+$("detail-logout").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-login-feedback");
+  try {
+    await post("webnovel/logout", { host: hostOf(item.url) });
+    setFeedback(node, "Sitzung entfernt.", "ok");
+    refreshLoginState();
+  } catch (error) {
+    setFeedback(node, error.message, "error");
   }
 });
 
