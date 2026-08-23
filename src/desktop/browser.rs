@@ -239,7 +239,7 @@ fn solve_probe_passes(url: &str) -> bool {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelSolveStatusResponse {
+pub(super) struct WebnovelSolveStatusResponse {
     state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
@@ -529,7 +529,7 @@ pub(super) fn build_webnovel_login_response(body: &[u8]) -> WebnovelLoginRespons
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelLoginStatusResponse {
+pub(super) struct WebnovelLoginStatusResponse {
     logged_in: bool,
     state: String,
     #[serde(skip_serializing_if = "Option::is_none")]

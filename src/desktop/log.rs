@@ -7,7 +7,7 @@ use super::*;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelDebugLogResponse {
+pub(super) struct WebnovelDebugLogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
     content: String,
