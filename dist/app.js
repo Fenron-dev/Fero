@@ -94,7 +94,10 @@ document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => {
     const view = item.dataset.view;
     showView(view);
-    if (view === "settings") loadTargets();
+    if (view === "settings") {
+      loadTargets();
+      loadBlocklist();
+    }
     if (view === "trash") loadTrash();
     if (view === "log") loadLog();
   });
@@ -703,6 +706,65 @@ function updateTargetHint(data) {
     ? ""
     : "Noch kein Zielordner festgelegt — siehe Einstellungen.";
 }
+
+// ── Blockliste ───────────────────────────────────────────────────────────
+
+let blocklist = [];
+
+async function loadBlocklist() {
+  try {
+    const data = await api("webnovel/blocklist");
+    blocklist = data.entries || [];
+  } catch (error) {
+    setFeedback($("blocklist-feedback"), error.message, "error");
+    return;
+  }
+
+  const container = $("blocklist-rows");
+  clear(container);
+  for (const entry of blocklist) {
+    const row = el("div", "target-row");
+    row.appendChild(el("span", "mono", entry.host));
+    row.appendChild(el("span", entry.note ? "" : "unset", entry.note || "—"));
+    row.appendChild(el("span", "card-meta", entry.builtin ? "mitgeliefert" : ""));
+
+    const remove = el("button", "action ghost", "Entfernen");
+    remove.disabled = entry.builtin;
+    remove.addEventListener("click", () => saveBlocklist(
+      blocklist.filter((other) => other.host !== entry.host)
+    ));
+    row.appendChild(remove);
+    container.appendChild(row);
+  }
+}
+
+/* Das Backend nimmt die vollständige Liste entgegen, nicht einzelne Änderungen.
+ * Mitgelieferte Einträge wandern mit — es filtert sie selbst wieder heraus. */
+async function saveBlocklist(entries) {
+  try {
+    await post("webnovel/blocklist/save", { entries });
+    await loadBlocklist();
+    setFeedback($("blocklist-feedback"), "Gespeichert.", "ok");
+  } catch (error) {
+    setFeedback($("blocklist-feedback"), error.message, "error");
+  }
+}
+
+$("block-add").addEventListener("click", () => {
+  const host = $("block-host").value.trim().toLowerCase();
+  if (!host) {
+    setFeedback($("blocklist-feedback"), "Bitte einen Host angeben.", "error");
+    return;
+  }
+  if (blocklist.some((entry) => entry.host === host)) {
+    setFeedback($("blocklist-feedback"), "Dieser Host steht bereits auf der Liste.", "error");
+    return;
+  }
+  const note = $("block-note").value.trim();
+  $("block-host").value = "";
+  $("block-note").value = "";
+  saveBlocklist([...blocklist, { host, note: note || null, builtin: false }]);
+});
 
 // ── Protokoll ────────────────────────────────────────────────────────────
 

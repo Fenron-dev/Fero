@@ -163,6 +163,22 @@
         </div>
       </div>
 
+      <div class="panel">
+        <p class="panel-label">Blockierte Quellen</p>
+        <p class="hint">
+          Hosts, von denen nicht abonniert wird. Mitgelieferte Einträge lassen
+          sich nicht entfernen — sie stehen dort aus rechtlichen Gründen oder
+          weil die Seite Scraping technisch nicht zulässt.
+        </p>
+        <div id="blocklist-rows"></div>
+        <div class="row">
+          <input type="text" id="block-host" class="input grow" placeholder="beispiel.com" />
+          <input type="text" id="block-note" class="input grow" placeholder="Grund (optional)" />
+          <button class="action" id="block-add">Hinzufügen</button>
+        </div>
+        <p class="feedback" id="blocklist-feedback"></p>
+      </div>
+
       <p class="feedback" id="settings-feedback"></p>
     </section>
 
