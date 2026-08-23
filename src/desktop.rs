@@ -330,6 +330,7 @@ fn build_select_folder_response() -> SelectFolderResponse {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AniListSearchResponse {
     metadata: Option<AniListAnimeMetadata>,
     results: Vec<AniListAnimeMetadata>,
@@ -347,6 +348,7 @@ impl AniListSearchResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SelectFolderResponse {
     path: Option<String>,
     error: Option<String>,
@@ -587,6 +589,7 @@ fn is_authorized_root(root: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenExternalResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -704,6 +707,7 @@ static WEBNOVEL_JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Progress snapshot of one check job, polled by the frontend.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelJobStatus {
     /// `running`, `done`, or `failed`.
     state: String,
@@ -793,6 +797,7 @@ struct CachedChapter {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSubscriptionSummary {
     id: String,
     url: String,
@@ -812,7 +817,6 @@ struct WebnovelSubscriptionSummary {
     anilist_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
-    /// Vault-relative path of the cached cover image, when one exists.
     /// Whether a cached cover exists in the work folder.
     ///
     /// Only a flag: with per-work targets there is no library-relative path to
@@ -861,6 +865,7 @@ impl WebnovelSubscriptionSummary {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelListResponse {
     subscriptions: Vec<WebnovelSubscriptionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1112,6 +1117,7 @@ struct WebnovelSubscribeRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSubscribeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     subscription: Option<WebnovelSubscriptionSummary>,
@@ -1253,6 +1259,7 @@ struct WebnovelUnsubscribeRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSimpleResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1332,6 +1339,7 @@ fn webnovel_trash_folder(delivery_parent: &Path, subscription: &Subscription) ->
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelTrashEntry {
     id: String,
     title: String,
@@ -1342,6 +1350,7 @@ struct WebnovelTrashEntry {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelTrashResponse {
     entries: Vec<WebnovelTrashEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1524,6 +1533,7 @@ struct WebnovelCheckRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelCheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     job_id: Option<String>,
@@ -1635,6 +1645,7 @@ fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelJobResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<WebnovelJobStatus>,
@@ -2357,6 +2368,7 @@ fn build_open_url_response(query: Option<&str>) -> WebnovelSimpleResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelBlocklistResponse {
     entries: Vec<BlocklistEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2440,6 +2452,7 @@ struct WebnovelSolveRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSolveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     host: Option<String>,
@@ -2624,6 +2637,7 @@ fn solve_probe_passes(url: &str) -> bool {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelSolveStatusResponse {
     state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2814,6 +2828,7 @@ struct WebnovelLoginRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelLoginResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     host: Option<String>,
@@ -2945,6 +2960,7 @@ fn build_webnovel_login_response(body: &[u8]) -> WebnovelLoginResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelLoginStatusResponse {
     logged_in: bool,
     state: String,
@@ -3007,6 +3023,7 @@ fn build_webnovel_logout_response(body: &[u8]) -> WebnovelSimpleResponse {
 // IPC / app access whatsoever.
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebnovelDebugLogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,

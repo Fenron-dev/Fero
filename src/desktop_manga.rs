@@ -162,6 +162,7 @@ impl Drop for CheckActiveGuard {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MangaSimpleResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,6 +256,7 @@ impl MangaSubscriptionSummary {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MangaListResponse {
     subscriptions: Vec<MangaSubscriptionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -520,6 +522,7 @@ pub(crate) fn build_unsubscribe_response(body: &[u8]) -> MangaSimpleResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MangaTrashResponse {
     subscriptions: Vec<MangaSubscriptionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -796,6 +799,7 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MangaJobResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<MangaJobStatus>,
