@@ -59,6 +59,13 @@ pub struct Subscription {
     /// for records written before this field was introduced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_name: Option<String>,
+    /// Overrides the delivery target for this one work.
+    ///
+    /// Highest level of the target chain: set it and this serial goes there
+    /// regardless of the media kind's default. `None` means "use the default
+    /// for my media kind".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dir: Option<String>,
     /// Author/writer, if the source exposes one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -175,6 +182,7 @@ impl Subscription {
             source: source.into(),
             title: title.into(),
             folder_name: None,
+            target_dir: None,
             author: None,
             artist: None,
             cover_url: None,
