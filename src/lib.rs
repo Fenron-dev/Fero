@@ -7,13 +7,10 @@ pub mod api;
 pub mod core;
 pub mod deliver;
 pub mod error;
-pub mod media;
 
 pub use api::anilist::AniListClient;
 pub use api::novel::{detect_source, ChapterRef, NovelInfo, NovelSource, PoliteClient};
-pub use core::covers::{CoverCandidate, CoverFallbackChain, CoverSource};
 pub use core::epub::{write_epub, EpubChapter, EpubMeta};
-pub use core::vault::{RelativePath, Vault};
 pub use core::webnovel::{
     delete_subscription, list_subscriptions, load_subscription, save_subscription, BlocklistEntry,
     KnownChapter, Subscription,
@@ -24,9 +21,6 @@ pub use deliver::targets::{
     TargetSource,
 };
 pub use error::{Result, VaultError};
-pub use media::{
-    MediaEntry, MediaProperties, MediaStatus, MediaType, PropertySource, ALL_MEDIA_TYPES,
-};
 
 /// Starts the Fero desktop shell.
 ///

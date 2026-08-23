@@ -7,7 +7,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VaultError};
-use crate::media::{MediaProperties, MediaType};
 
 const DEFAULT_ENDPOINT: &str = "https://graphql.anilist.co";
 const ANILIST_MEDIA_QUERY: &str = r#"
@@ -394,10 +393,6 @@ impl AniListClient {
         self
     }
 
-    /// Returns the media type specific adult flag used by AniList queries.
-    pub fn adult_flag_for(media_type: MediaType) -> bool {
-        media_type.is_adult()
-    }
 
     /// Builds a JSON request body for an AniList anime search.
     pub fn build_search_query(search: &str, adult: bool) -> String {
@@ -680,29 +675,6 @@ impl AniListAnimeMetadata {
             .or(self.title_native.as_deref())
     }
 
-    /// Applies the fetched AniList data to portable media properties.
-    pub fn apply_to_properties(&self, properties: &mut MediaProperties) {
-        properties.anilist_id = Some(self.anilist_id);
-        properties.anilist_url = self.anilist_url.clone();
-        properties.title = self.display_title().map(|value| value.to_string());
-        properties.title_original = self.title_native.clone();
-        properties.description = self.description.clone();
-        properties.year = self.season_year;
-        properties.genres = self.genres.clone();
-        properties.tags = self.tags.iter().map(|tag| tag.name.clone()).collect();
-        properties.categories = self
-            .format
-            .as_ref()
-            .map(|value| vec![value.clone()])
-            .unwrap_or_default();
-        properties.rating_external = self.average_score;
-        properties.series_title = self.display_title().map(|value| value.to_string());
-        properties.episode_count = self.episodes;
-        properties.runtime_minutes = self.duration;
-        properties.average_score = self.average_score;
-        properties.format = self.format.clone();
-        properties.airing_season = self.season.clone();
-    }
 }
 
 /// Date value returned by AniList.
@@ -1380,11 +1352,6 @@ struct AniListNovelCover {
 mod tests {
     use super::*;
 
-    #[test]
-    fn adult_flag_matches_media_type() {
-        assert!(AniListClient::adult_flag_for(MediaType::HentaiAnime));
-        assert!(!AniListClient::adult_flag_for(MediaType::Anime));
-    }
 
     #[test]
     fn builds_query_text() {

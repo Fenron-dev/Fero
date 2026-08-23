@@ -1,7 +1,6 @@
 //! Core business logic for Fero.
 
 pub mod cbz;
-pub mod covers;
 pub mod epub;
 pub mod manga;
 pub mod subscription;
