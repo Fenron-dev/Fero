@@ -55,7 +55,7 @@ pub(crate) trait Outcome {
 /// Implements [`Outcome`] for response structs with an `error: Option<String>`.
 macro_rules! impl_outcome {
     ($($type:ty),+ $(,)?) => {
-        $(impl $crate::desktop::http::Outcome for $type {
+        $(impl $crate::desktop::Outcome for $type {
             fn failure(&self) -> Option<&str> {
                 self.error.as_deref()
             }
