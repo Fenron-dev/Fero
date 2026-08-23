@@ -15,8 +15,8 @@ use crate::api::novel::{
     PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
-use crate::core::vault::Vault;
 use crate::core::subscription::is_valid_subscription_id;
+use crate::core::vault::Vault;
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
@@ -2310,7 +2310,11 @@ fn build_batch_epub(
 }
 
 /// Rebuilds the complete EPUB from every cached chapter.
-fn build_complete_epub(novel_dir: &Path, cache_dir: &Path, subscription: &Subscription) -> Result<()> {
+fn build_complete_epub(
+    novel_dir: &Path,
+    cache_dir: &Path,
+    subscription: &Subscription,
+) -> Result<()> {
     let indices: Vec<u32> = subscription
         .known_chapters
         .iter()
