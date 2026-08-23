@@ -15,9 +15,7 @@ use crate::api::novel::{
     PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
-use crate::core::properties::{
-    legacy_sidecar_path_for, render_sidecar_yaml, sidecar_path_for, SIDECAR_SUFFIX,
-};
+use crate::core::properties::{legacy_sidecar_path_for, render_sidecar_yaml, sidecar_path_for};
 use crate::core::vault::{RelativePath, Vault};
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
@@ -36,29 +34,7 @@ const LEGACY_SYSTEM_DIR: &str = ".mediashelf";
 /// In-vault trash folder; deleted files move here (reversible) preserving
 /// their original relative path.
 const TRASH_DIR: &str = ".trash";
-const LEGACY_SIDECAR_SUFFIX: &str = ".mediashelf.yaml";
-const ANILIST_CACHE_FILE: &str = "anilist_cache.json";
 
-const INBOX_SUBFOLDERS: &[&str] = &[
-    "Unsortiert",
-    "Anime/TV",
-    "Anime/Filme",
-    "Serien",
-    "Filme",
-    "Musik",
-    "Bücher",
-    "Hörbücher",
-    "Manga",
-    "Comics",
-    "TTRPG",
-    "Games",
-];
-
-type AniListCacheMap = HashMap<String, AniListAnimeMetadata>;
-
-/// Permission bits for files that hold credentials or browsing history:
-/// readable and writable by the owner only.
-#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 /// Same idea for the app's state directory.
 #[cfg(unix)]
@@ -107,35 +83,6 @@ fn write_private_file(path: &Path, contents: &str) -> std::io::Result<()> {
         .open(path)?;
     restrict_to_owner(path, false);
     file.write_all(contents.as_bytes())
-}
-
-fn anilist_cache_path() -> Option<PathBuf> {
-    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".fero").join(ANILIST_CACHE_FILE))
-}
-
-fn load_anilist_cache() -> AniListCacheMap {
-    let path = match anilist_cache_path() {
-        Some(p) => p,
-        None => return HashMap::new(),
-    };
-    let raw = match fs::read_to_string(&path) {
-        Ok(r) => r,
-        Err(_) => return HashMap::new(),
-    };
-    serde_json::from_str(&raw).unwrap_or_default()
-}
-
-fn save_anilist_cache(cache: &AniListCacheMap) {
-    let Some(path) = anilist_cache_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        ensure_private_dir(parent);
-    }
-    if let Ok(body) = serde_json::to_string(cache) {
-        let _ = fs::write(path, body);
-    }
 }
 
 const INDEX_HTML: &str = include_str!("../dist/index.html");
@@ -934,31 +881,6 @@ fn build_open_external_response(query: Option<&str>) -> OpenExternalResponse {
     // double-clicking in Finder. This is fire-and-forget — we only care that
     // the process started, not how it exits.
     match std::process::Command::new("open").arg(&absolute).spawn() {
-        Ok(_) => OpenExternalResponse::ok(),
-        Err(e) => OpenExternalResponse::error(format!("open failed: {e}")),
-    }
-}
-
-fn build_open_vault_root_response(query: Option<&str>) -> OpenExternalResponse {
-    let root_override = query.and_then(|q| extract_query_value(q, "root"));
-    let vault_root = match resolve_vault_root(root_override.as_deref()) {
-        Ok(Some(r)) => r,
-        Ok(None) => return OpenExternalResponse::error("Kein Vault geöffnet."),
-        Err(e) => return OpenExternalResponse::error(e.to_string()),
-    };
-
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-
-    match std::process::Command::new(program)
-        .arg(vault_root.as_path())
-        .spawn()
-    {
         Ok(_) => OpenExternalResponse::ok(),
         Err(e) => OpenExternalResponse::error(format!("open failed: {e}")),
     }
