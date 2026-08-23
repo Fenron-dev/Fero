@@ -7,7 +7,7 @@
 mod http;
 mod routes;
 
-pub(crate) use http::{extract_query_value, json_response};
+pub(crate) use http::{extract_query_value, impl_outcome, json_response, Outcome};
 use routes::handle_request;
 
 use std::collections::{HashMap, HashSet};
@@ -43,6 +43,22 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 const PROTOCOL_SCHEME: &str = "fero";
+
+impl_outcome!(
+    AniListSearchResponse,
+    SelectFolderResponse,
+    OpenExternalResponse,
+    WebnovelListResponse,
+    TargetsResponse,
+    WebnovelSubscribeResponse,
+    WebnovelSimpleResponse,
+    WebnovelTrashResponse,
+    WebnovelCheckResponse,
+    WebnovelJobResponse,
+    WebnovelBlocklistResponse,
+    WebnovelSolveResponse,
+    WebnovelLoginResponse,
+);
 const LEGACY_SYSTEM_DIR: &str = ".mediashelf";
 /// In-vault trash folder; deleted files move here (reversible) preserving
 /// their original relative path.
