@@ -11,13 +11,7 @@ pub mod media;
 pub use api::anilist::AniListClient;
 pub use api::novel::{detect_source, ChapterRef, NovelInfo, NovelSource, PoliteClient};
 pub use core::covers::{CoverCandidate, CoverFallbackChain, CoverSource};
-pub use core::duplicate::{compute_fingerprint, compute_fingerprint_for_file, FileFingerprint};
 pub use core::epub::{write_epub, EpubChapter, EpubMeta};
-pub use core::import::{
-    ClassificationSource, DuplicatePolicy, FileClassification, ImportConfig, ImportPlan,
-    ImportPlanItem, ImportPlanner, ImportSummary, IncomingFile, PlannedImportStep,
-    ResolvedMetadata, UserPrompt,
-};
 pub use core::properties::{render_sidecar_yaml, sidecar_path_for};
 pub use core::vault::{RelativePath, Vault};
 pub use core::webnovel::{
@@ -31,8 +25,8 @@ pub use media::{
 
 /// Starts the Fero desktop shell.
 ///
-/// The core modules still expose the vault, import, and metadata primitives;
-/// this entry point now opens the first testable Tauri window.
+/// Fero subscribes to sources, downloads new items, packages them and hands
+/// them to the library. Browsing, viewing and reading progress live in Fundus.
 pub fn run() -> Result<()> {
     desktop::run()
 }

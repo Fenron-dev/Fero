@@ -2,9 +2,7 @@
 
 pub mod cbz;
 pub mod covers;
-pub mod duplicate;
 pub mod epub;
-pub mod import;
 pub mod manga;
 pub mod properties;
 pub mod subscription;
