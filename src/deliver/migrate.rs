@@ -62,7 +62,9 @@ pub fn migrate_store_from_library(data_dir: &Path, library_system_dir: &Path) ->
         let copied = if source.is_dir() {
             copy_dir(&source, &target)
         } else {
-            std::fs::copy(&source, &target).map(|_| 0).map_err(|error| error.to_string())
+            std::fs::copy(&source, &target)
+                .map(|_| 0)
+                .map_err(|error| error.to_string())
         };
         match copied {
             Ok(count) => subscriptions += count,
@@ -106,10 +108,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "fero-migrate-{}-{name}-{n}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fero-migrate-{}-{name}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir should be creatable");
         dir
