@@ -334,7 +334,6 @@ pub(crate) fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Resp
     }
 }
 
-
 fn build_anilist_search_response(query: Option<&str>) -> AniListSearchResponse {
     let Some(query) = query else {
         return AniListSearchResponse::error("missing query".to_string());
@@ -361,7 +360,6 @@ fn build_anilist_search_response(query: Option<&str>) -> AniListSearchResponse {
     }
 }
 
-
 fn build_select_folder_response() -> SelectFolderResponse {
     let selected = rfd::FileDialog::new().pick_folder();
     SelectFolderResponse {
@@ -369,7 +367,6 @@ fn build_select_folder_response() -> SelectFolderResponse {
         error: None,
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Shared helpers (paths, app state, sidecars, query parsing)
