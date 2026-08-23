@@ -17,13 +17,13 @@ use crate::api::novel::{
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
 use crate::core::properties::{legacy_sidecar_path_for, render_sidecar_yaml, sidecar_path_for};
 use crate::core::vault::{RelativePath, Vault};
-use crate::deliver::targets::{resolve_data_dir, DataDir};
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
     save_subscription, save_user_blocklist, trash_subscription, unix_now, BlocklistEntry,
     KnownChapter, Subscription,
 };
+use crate::deliver::targets::{resolve_data_dir, DataDir};
 use crate::error::{Result, VaultError};
 use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
 use serde::{Deserialize, Serialize};
@@ -1995,7 +1995,13 @@ fn check_one_subscription(
     } else if !complete_missing {
         // No rebuild needed, but Goodreads/AniList enrichment may have added
         // metadata — keep the sidecar (and thus the collections view) in sync.
-        write_webnovel_sidecar(&ws.vault, subscription, &complete_file, &subscription.id, None)?;
+        write_webnovel_sidecar(
+            &ws.vault,
+            subscription,
+            &complete_file,
+            &subscription.id,
+            None,
+        )?;
     }
 
     if skipped_chapters > 0 {
