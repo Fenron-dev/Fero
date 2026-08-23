@@ -95,6 +95,7 @@ document.querySelectorAll(".nav-item").forEach((item) => {
     const view = item.dataset.view;
     showView(view);
     if (view === "settings") loadTargets();
+    if (view === "trash") loadTrash();
     if (view === "log") loadLog();
   });
 });
@@ -523,6 +524,83 @@ function pollJob(kind, jobId) {
 
   tick();
   jobTimer = setInterval(tick, 900);
+}
+
+// ── Papierkorb ───────────────────────────────────────────────────────────
+
+async function loadTrash() {
+  const [novels, mangas] = await Promise.all([
+    api("webnovel/trash").catch(() => ({ entries: [] })),
+    api("manga/trash").catch(() => ({ subscriptions: [] })),
+  ]);
+
+  /* Die beiden Routen antworten unterschiedlich: Webnovels liefern schlanke
+   * Papierkorb-Eintraege, Manga die vollen Zusammenfassungen. Hier auf eine
+   * gemeinsame Form bringen, statt das in der Darstellung zu verzweigen. */
+  const entries = [
+    ...(novels.entries || []).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      kind: "webnovel",
+      filesInTrash: entry.filesInTrash,
+      trashedAtUnix: entry.trashedAtUnix,
+    })),
+    ...(mangas.subscriptions || []).map((item) => ({
+      id: item.id,
+      title: item.title,
+      kind: "manga",
+      filesInTrash: false,
+    })),
+  ];
+
+  $("nav-count-trash").textContent = entries.length || "";
+
+  const list = $("trash-list");
+  clear(list);
+  $("trash-empty").hidden = entries.length > 0;
+
+  for (const entry of entries) {
+    const row = el("div", "card");
+    const left = el("div");
+    left.appendChild(el("div", "card-title", entry.title));
+    const parts = [kindLabel(entry.kind)];
+    if (entry.trashedAtUnix) {
+      parts.push(new Date(entry.trashedAtUnix * 1000).toLocaleDateString("de-DE"));
+    }
+    if (entry.filesInTrash) parts.push("Dateien beiseitegelegt");
+    left.appendChild(el("div", "card-meta", parts.join(" · ")));
+
+    const actions = el("div", "row");
+    const restore = el("button", "action", "Wiederherstellen");
+    restore.addEventListener("click", () => trashAction(entry, "restore"));
+    const purge = el("button", "action danger", "Endgültig löschen");
+    purge.addEventListener("click", () => {
+      if (window.confirm(`„${entry.title}" endgültig löschen?`)) {
+        trashAction(entry, "purge");
+      }
+    });
+    actions.appendChild(restore);
+    actions.appendChild(purge);
+
+    row.appendChild(left);
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
+}
+
+async function trashAction(entry, action) {
+  try {
+    await post(`${entry.kind}/${action}`, { id: entry.id });
+    await loadTrash();
+    await loadSubscriptions();
+    setFeedback(
+      $("trash-feedback"),
+      action === "restore" ? "Wiederhergestellt." : "Endgültig gelöscht.",
+      "ok"
+    );
+  } catch (error) {
+    setFeedback($("trash-feedback"), error.message, "error");
+  }
 }
 
 // ── Einstellungen ────────────────────────────────────────────────────────

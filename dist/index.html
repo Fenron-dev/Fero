@@ -12,6 +12,10 @@
     <button class="nav-item" data-view="settings">
       <span class="nav-label">Einstellungen</span>
     </button>
+    <button class="nav-item" data-view="trash">
+      <span class="nav-label">Papierkorb</span>
+      <span class="nav-count" id="nav-count-trash"></span>
+    </button>
     <button class="nav-item" data-view="log">
       <span class="nav-label">Protokoll</span>
     </button>
@@ -160,6 +164,21 @@
       </div>
 
       <p class="feedback" id="settings-feedback"></p>
+    </section>
+
+    <!-- Papierkorb -->
+    <section class="view" data-view="trash">
+      <header class="view-head">
+        <h1>Papierkorb</h1>
+      </header>
+      <p class="hint">
+        Gelöschte Abos. Die ausgelieferten Dateien sind davon nicht betroffen —
+        endgültiges Löschen entfernt nur den Abo-Eintrag und, falls vorhanden,
+        die von Fero beiseitegelegten Dateien.
+      </p>
+      <div class="cards" id="trash-list"></div>
+      <p class="empty" id="trash-empty" hidden>Der Papierkorb ist leer.</p>
+      <p class="feedback" id="trash-feedback"></p>
     </section>
 
     <!-- Protokoll -->
