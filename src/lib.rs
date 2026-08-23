@@ -18,13 +18,6 @@ pub use core::import::{
     ImportPlanItem, ImportPlanner, ImportSummary, IncomingFile, PlannedImportStep,
     ResolvedMetadata, UserPrompt,
 };
-pub use core::playlist::{
-    delete_cursor, delete_playlist, list_playlists, load_cursor, load_playlist, save_cursor,
-    save_playlist, Playlist, PlaylistCursor, PlaylistFilter, PlaylistKind, SortDir, SortRule,
-};
-pub use core::progress::{
-    delete_progress, list_in_progress, load_progress, save_progress, MediaProgress, ProgressRecord,
-};
 pub use core::properties::{render_sidecar_yaml, sidecar_path_for};
 pub use core::vault::{RelativePath, Vault};
 pub use core::webnovel::{

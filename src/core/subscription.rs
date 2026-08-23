@@ -568,8 +568,7 @@ pub fn unix_now() -> u64 {
 
 /// FNV-1a 64-bit hash.
 ///
-/// Duplicated from `core::progress` (where it is private) to avoid widening
-/// that module's API for a two-line function.
+/// Used to derive stable, filesystem-safe keys from arbitrary strings.
 fn fnv1a64(bytes: &[u8]) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
