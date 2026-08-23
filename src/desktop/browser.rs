@@ -48,10 +48,12 @@ struct WebnovelSolveRequest {
     url: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
+// Steht hier statt in mod.rs: das Makro greift auf das private error-Feld zu
+// und muss deshalb dort stehen, wo die Strukturen definiert sind.
 impl_outcome!(WebnovelSolveResponse, WebnovelLoginResponse);
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct WebnovelSolveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     host: Option<String>,

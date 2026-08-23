@@ -50,9 +50,7 @@ use tauri::Manager;
 
 const PROTOCOL_SCHEME: &str = "fero";
 
-// Die beiden Fenster-Antworten deklarieren ihr Outcome in browser.rs: das Makro
-// greift auf das private error-Feld zu und muss deshalb dort stehen, wo die
-// Struktur definiert ist.
+// Die beiden Fenster-Antworten deklarieren ihr Outcome in browser.rs.
 impl_outcome!(
     AniListSearchResponse,
     SelectFolderResponse,
