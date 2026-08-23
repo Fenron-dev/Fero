@@ -19,7 +19,7 @@ use super::{
     absolutize, extract_content, sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo,
     NovelSource, PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Content selectors for chapter pages, in priority order.
 const CHAPTER_CONTENT_SELECTORS: [&str; 3] =
@@ -80,7 +80,7 @@ impl NovelSource for NovelFullSource {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let html = Html::parse_document(&body);
         let content = extract_content(&html, &CHAPTER_CONTENT_SELECTORS).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "NovelFull-Kapitelinhalt nicht gefunden: {}",
                 chapter.url
             ))
@@ -95,7 +95,7 @@ impl NovelSource for NovelFullSource {
 /// Parses the novel page: metadata plus the first chapter-list page.
 fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
     let title = first_text(html, "h3.title").ok_or_else(|| {
-        VaultError::ExternalApi(format!("NovelFull-Titel nicht gefunden: {page_url}"))
+        FeroError::ExternalApi(format!("NovelFull-Titel nicht gefunden: {page_url}"))
     })?;
 
     let cover_url = first_attr(html, ".book img", "src")
@@ -109,7 +109,7 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
 
     let chapters = parse_chapter_links(page_url, html);
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitel auf der NovelFull-Seite gefunden: {page_url}"
         )));
     }

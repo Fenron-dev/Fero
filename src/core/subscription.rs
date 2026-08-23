@@ -34,7 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -264,7 +264,7 @@ fn ensure_valid_subscription_id(candidate: &str) -> Result<()> {
     if is_valid_subscription_id(candidate) {
         return Ok(());
     }
-    Err(VaultError::InvalidProperty(format!(
+    Err(FeroError::InvalidProperty(format!(
         "invalid subscription id: {candidate}"
     )))
 }
@@ -286,7 +286,7 @@ pub fn subscription_file_path(system_dir: &Path, store: &str, subscription_id: &
 /// Loads a subscription by id, if one exists.
 ///
 /// # Errors
-/// - `VaultError::InvalidProperty` if `subscription_id` is not a generated id
+/// - `FeroError::InvalidProperty` if `subscription_id` is not a generated id
 pub fn load_subscription(
     system_dir: &Path,
     store: &str,
@@ -297,16 +297,16 @@ pub fn load_subscription(
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path).map_err(VaultError::from)?;
+    let raw = fs::read_to_string(&path).map_err(FeroError::from)?;
     let subscription: Subscription = serde_json::from_str(&raw)
-        .map_err(|e| VaultError::Serialization(format!("subscription JSON parse error: {e}")))?;
+        .map_err(|e| FeroError::Serialization(format!("subscription JSON parse error: {e}")))?;
     Ok(Some(subscription))
 }
 
 /// Persists a subscription, creating the store directory if needed.
 ///
 /// # Errors
-/// - `VaultError::InvalidProperty` if the record carries a malformed id
+/// - `FeroError::InvalidProperty` if the record carries a malformed id
 pub fn save_subscription(
     system_dir: &Path,
     store: &str,
@@ -314,12 +314,12 @@ pub fn save_subscription(
 ) -> Result<()> {
     ensure_valid_subscription_id(&subscription.id)?;
     let dir = store_dir(system_dir, store);
-    fs::create_dir_all(&dir).map_err(VaultError::from)?;
+    fs::create_dir_all(&dir).map_err(FeroError::from)?;
     let path = subscription_file_path(system_dir, store, &subscription.id);
     let json = serde_json::to_string_pretty(subscription).map_err(|e| {
-        VaultError::Serialization(format!("subscription JSON serialize error: {e}"))
+        FeroError::Serialization(format!("subscription JSON serialize error: {e}"))
     })?;
-    fs::write(&path, json).map_err(VaultError::from)?;
+    fs::write(&path, json).map_err(FeroError::from)?;
     Ok(())
 }
 
@@ -346,13 +346,13 @@ pub fn trash_subscription(
     };
     subscription.trashed_at_unix = Some(unix_now());
     let dir = trash_dir(system_dir, store);
-    fs::create_dir_all(&dir).map_err(VaultError::from)?;
+    fs::create_dir_all(&dir).map_err(FeroError::from)?;
     let json = serde_json::to_string_pretty(&subscription)
-        .map_err(|e| VaultError::Serialization(format!("subscription serialize error: {e}")))?;
+        .map_err(|e| FeroError::Serialization(format!("subscription serialize error: {e}")))?;
     fs::write(trashed_file_path(system_dir, store, subscription_id), json)
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
     fs::remove_file(subscription_file_path(system_dir, store, subscription_id))
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
     Ok(Some(subscription))
 }
 
@@ -364,12 +364,12 @@ pub fn restore_subscription(
 ) -> Result<Subscription> {
     ensure_valid_subscription_id(subscription_id)?;
     let path = trashed_file_path(system_dir, store, subscription_id);
-    let raw = fs::read_to_string(&path).map_err(VaultError::from)?;
+    let raw = fs::read_to_string(&path).map_err(FeroError::from)?;
     let mut subscription: Subscription = serde_json::from_str(&raw)
-        .map_err(|e| VaultError::Serialization(format!("subscription parse error: {e}")))?;
+        .map_err(|e| FeroError::Serialization(format!("subscription parse error: {e}")))?;
     subscription.trashed_at_unix = None;
     save_subscription(system_dir, store, &subscription)?;
-    fs::remove_file(&path).map_err(VaultError::from)?;
+    fs::remove_file(&path).map_err(FeroError::from)?;
     Ok(subscription)
 }
 
@@ -380,7 +380,7 @@ pub fn list_trashed_subscriptions(system_dir: &Path, store: &str) -> Result<Vec<
         return Ok(Vec::new());
     }
     let mut trashed: Vec<Subscription> = fs::read_dir(&dir)
-        .map_err(VaultError::from)?
+        .map_err(FeroError::from)?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -402,7 +402,7 @@ pub fn purge_trashed_subscription(
     ensure_valid_subscription_id(subscription_id)?;
     let path = trashed_file_path(system_dir, store, subscription_id);
     if path.exists() {
-        fs::remove_file(&path).map_err(VaultError::from)?;
+        fs::remove_file(&path).map_err(FeroError::from)?;
     }
     Ok(())
 }
@@ -413,7 +413,7 @@ pub fn delete_subscription(system_dir: &Path, store: &str, subscription_id: &str
     ensure_valid_subscription_id(subscription_id)?;
     let path = subscription_file_path(system_dir, store, subscription_id);
     if path.exists() {
-        fs::remove_file(&path).map_err(VaultError::from)?;
+        fs::remove_file(&path).map_err(FeroError::from)?;
     }
     Ok(())
 }
@@ -429,7 +429,7 @@ pub fn list_subscriptions(system_dir: &Path, store: &str) -> Result<Vec<Subscrip
     }
 
     let mut subscriptions: Vec<Subscription> = fs::read_dir(&dir)
-        .map_err(VaultError::from)?
+        .map_err(FeroError::from)?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -527,9 +527,9 @@ pub fn save_user_blocklist(system_dir: &Path, entries: &[BlocklistEntry]) -> Res
         .filter(|entry| !entry.builtin && !entry.host.trim().is_empty())
         .collect();
     let json = serde_json::to_string_pretty(&user_entries)
-        .map_err(|e| VaultError::Serialization(format!("blocklist serialize error: {e}")))?;
-    fs::create_dir_all(system_dir).map_err(VaultError::from)?;
-    fs::write(blocklist_file_path(system_dir), json).map_err(VaultError::from)?;
+        .map_err(|e| FeroError::Serialization(format!("blocklist serialize error: {e}")))?;
+    fs::create_dir_all(system_dir).map_err(FeroError::from)?;
+    fs::write(blocklist_file_path(system_dir), json).map_err(FeroError::from)?;
     Ok(())
 }
 

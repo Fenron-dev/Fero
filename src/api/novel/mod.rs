@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use scraper::{Html, Selector};
 
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -232,7 +232,7 @@ impl PoliteClient {
     /// Builds the client with the shared timeout and user agent.
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` if the TLS backend fails to initialize
+    /// - `FeroError::ExternalApi` if the TLS backend fails to initialize
     pub fn new() -> Result<Self> {
         Self::with_delay_ms(MIN_REQUEST_DELAY_MS)
     }
@@ -243,13 +243,13 @@ impl PoliteClient {
     /// on the source sites, slower is pointless.
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` if the TLS backend fails to initialize
+    /// - `FeroError::ExternalApi` if the TLS backend fails to initialize
     pub fn with_delay_ms(delay_ms: u64) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()
-            .map_err(|e| VaultError::ExternalApi(format!("HTTP client init failed: {e}")))?;
+            .map_err(|e| FeroError::ExternalApi(format!("HTTP client init failed: {e}")))?;
         Ok(Self {
             client,
             min_delay: Duration::from_millis(
@@ -278,7 +278,7 @@ impl PoliteClient {
     /// maps Cloudflare challenges to a descriptive error.
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
+    /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_text(&self, url: &str) -> Result<(String, String)> {
         self.get_text_with(url, &[])
     }
@@ -291,7 +291,7 @@ impl PoliteClient {
     /// and `User-Agent` so a solved challenge is never overwritten.
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
+    /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_text_with(&self, url: &str, headers: &[(&str, &str)]) -> Result<(String, String)> {
         // Whitelisted hosts go through the browser window when a renderer is
         // attached — plain HTTP either can't pass Cloudflare (TLS-bound) or
@@ -325,7 +325,7 @@ impl PoliteClient {
     /// Applies the same per-host delay and retry rules as [`Self::get_text`].
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
+    /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
         self.fetch_bytes(url, None, self.min_delay)
     }
@@ -341,7 +341,7 @@ impl PoliteClient {
     /// - `Ok(Vec<u8>)` – Raw image bytes; the caller validates the format
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` on HTTP errors after retries are exhausted
+    /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_image(&self, url: &str, referer: Option<&str>) -> Result<Vec<u8>> {
         self.fetch_bytes(url, referer, self.image_delay)
     }
@@ -380,23 +380,23 @@ impl PoliteClient {
                 .header("User-Agent", session.user_agent);
         }
         let response = request.send().map_err(|e| {
-            RequestFailure::Transient(VaultError::ExternalApi(format!(
+            RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "request to {url} failed: {e}"
             )))
         })?;
         let status = response.status();
         if status.as_u16() == 429 || status.is_server_error() {
-            return Err(RequestFailure::Transient(VaultError::ExternalApi(format!(
+            return Err(RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "{url} answered with status {status}"
             ))));
         }
         if !status.is_success() {
-            return Err(RequestFailure::Fatal(VaultError::ExternalApi(format!(
+            return Err(RequestFailure::Fatal(FeroError::ExternalApi(format!(
                 "{url} answered with status {status}"
             ))));
         }
         let bytes = response.bytes().map_err(|e| {
-            RequestFailure::Transient(VaultError::ExternalApi(format!(
+            RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "reading body of {url} failed: {e}"
             )))
         })?;
@@ -421,11 +421,11 @@ impl PoliteClient {
         }
         let response = request.send().map_err(|e| {
             if e.is_timeout() || e.is_connect() {
-                RequestFailure::Transient(VaultError::ExternalApi(format!(
+                RequestFailure::Transient(FeroError::ExternalApi(format!(
                     "request to {url} failed: {e}"
                 )))
             } else {
-                RequestFailure::Fatal(VaultError::ExternalApi(format!(
+                RequestFailure::Fatal(FeroError::ExternalApi(format!(
                     "request to {url} failed: {e}"
                 )))
             }
@@ -440,7 +440,7 @@ impl PoliteClient {
             if is_cloudflare_challenge(&response) {
                 return Err(RequestFailure::Fatal(cloudflare_error(url)));
             }
-            return Err(RequestFailure::Transient(VaultError::ExternalApi(format!(
+            return Err(RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "{url} answered with status {status}"
             ))));
         }
@@ -448,13 +448,13 @@ impl PoliteClient {
             return Err(RequestFailure::Fatal(cloudflare_error(url)));
         }
         if !status.is_success() {
-            return Err(RequestFailure::Fatal(VaultError::ExternalApi(format!(
+            return Err(RequestFailure::Fatal(FeroError::ExternalApi(format!(
                 "{url} answered with status {status}"
             ))));
         }
 
         let body = response.text().map_err(|e| {
-            RequestFailure::Transient(VaultError::ExternalApi(format!(
+            RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "reading body of {url} failed: {e}"
             )))
         })?;
@@ -491,12 +491,12 @@ impl PoliteClient {
 
 /// Distinguishes retryable failures from permanent ones.
 enum RequestFailure {
-    Transient(VaultError),
-    Fatal(VaultError),
+    Transient(FeroError),
+    Fatal(FeroError),
 }
 
-fn cloudflare_error(url: &str) -> VaultError {
-    VaultError::ExternalApi(format!(
+fn cloudflare_error(url: &str) -> FeroError {
+    FeroError::ExternalApi(format!(
         "Die Seite blockiert automatische Zugriffe (Cloudflare-Schutz): {url}"
     ))
 }

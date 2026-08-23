@@ -37,7 +37,7 @@ pub mod themesia;
 pub mod webtoons;
 
 use crate::api::novel::PoliteClient;
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -178,10 +178,10 @@ fn matches_host(host: &str, candidates: &[&str]) -> bool {
 /// Returns the adapter for `url`, or a German error naming the supported sites.
 ///
 /// # Errors
-/// - `VaultError::ExternalApi` when no adapter covers the URL's host
+/// - `FeroError::ExternalApi` when no adapter covers the URL's host
 pub fn require_source(url: &str) -> Result<Box<dyn MangaSource>> {
     detect_source(url).ok_or_else(|| {
-        VaultError::ExternalApi(format!(
+        FeroError::ExternalApi(format!(
             "Für diese Seite gibt es keinen Manga-Adapter. \
              Unterstützt werden derzeit: {}.",
             SUPPORTED_HOSTS.join(", ")

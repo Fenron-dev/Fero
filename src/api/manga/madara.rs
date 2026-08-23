@@ -25,7 +25,7 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Madara-theme adapter.
 pub struct MadaraSource;
@@ -65,11 +65,11 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         .map(strip_title_badges)
         .filter(|title| !title.is_empty())
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("Madara: Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("Madara: Titel nicht gefunden: {page_url}"))
         })?;
 
     let chapter_selector = Selector::parse("li.wp-manga-chapter > a")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for link in html.select(&chapter_selector) {
@@ -90,7 +90,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Madara: Keine Kapitel gefunden — die Seite lädt die Liste \
              möglicherweise per AJAX nach: {page_url}"
         )));
@@ -122,7 +122,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
 fn parse_chapter_images(page_url: &str, body: &str) -> Result<Vec<String>> {
     let html = Html::parse_document(body);
     let selector = Selector::parse(".reading-content img")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let images: Vec<String> = html
         .select(&selector)
@@ -143,7 +143,7 @@ fn parse_chapter_images(page_url: &str, body: &str) -> Result<Vec<String>> {
         .collect();
 
     if images.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Madara: Keine Seitenbilder im Kapitel gefunden: {page_url}"
         )));
     }

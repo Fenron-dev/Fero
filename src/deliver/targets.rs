@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Directory name used for the portable data folder next to the application.
 const PORTABLE_DIR_NAME: &str = "Fero-Daten";
@@ -211,21 +211,21 @@ fn load_pointer() -> Option<PathBuf> {
 /// Records a data directory the user picked.
 ///
 /// # Errors
-/// - [`VaultError::InvalidVaultPath`] if the directory cannot be written to
-/// - [`VaultError::Io`] if the pointer file cannot be stored
+/// - [`FeroError::InvalidTarget`] if the directory cannot be written to
+/// - [`FeroError::Io`] if the pointer file cannot be stored
 pub fn set_data_dir(dir: &Path) -> Result<()> {
-    is_usable(dir).map_err(VaultError::InvalidVaultPath)?;
+    is_usable(dir).map_err(FeroError::InvalidTarget)?;
     let path = pointer_path()
-        .ok_or_else(|| VaultError::Io("Kein Home-Verzeichnis gefunden.".to_string()))?;
+        .ok_or_else(|| FeroError::Io("Kein Home-Verzeichnis gefunden.".to_string()))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(VaultError::from)?;
+        std::fs::create_dir_all(parent).map_err(FeroError::from)?;
     }
     let pointer = Pointer {
         data_dir: dir.to_string_lossy().to_string(),
     };
     let body = serde_json::to_string_pretty(&pointer)
-        .map_err(|error| VaultError::Serialization(error.to_string()))?;
-    std::fs::write(&path, body).map_err(VaultError::from)
+        .map_err(|error| FeroError::Serialization(error.to_string()))?;
+    std::fs::write(&path, body).map_err(FeroError::from)
 }
 
 // ---------------------------------------------------------------------------

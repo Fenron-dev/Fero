@@ -36,7 +36,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::core::epub::escape_xml;
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Width of the zero-padded page number in archive entry names.
 const PAGE_NUMBER_WIDTH: usize = 4;
@@ -103,20 +103,20 @@ pub struct CbzMeta {
 /// - `Ok(())` – Archive written and flushed
 ///
 /// # Errors
-/// - `VaultError::InvalidProperty` if `pages` is empty
-/// - `VaultError::Io` on filesystem or zip write failures
+/// - `FeroError::InvalidProperty` if `pages` is empty
+/// - `FeroError::Io` on filesystem or zip write failures
 pub fn write_cbz(target: &Path, meta: &CbzMeta, pages: &[CbzPage]) -> Result<()> {
     if pages.is_empty() {
-        return Err(VaultError::InvalidProperty(
+        return Err(FeroError::InvalidProperty(
             "cannot write a CBZ without pages".to_string(),
         ));
     }
 
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(VaultError::from)?;
+        std::fs::create_dir_all(parent).map_err(FeroError::from)?;
     }
 
-    let file = File::create(target).map_err(VaultError::from)?;
+    let file = File::create(target).map_err(FeroError::from)?;
     let mut zip = ZipWriter::new(file);
 
     let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -127,12 +127,12 @@ pub fn write_cbz(target: &Path, meta: &CbzMeta, pages: &[CbzPage]) -> Result<()>
     zip.start_file("ComicInfo.xml", deflated)
         .map_err(zip_error)?;
     zip.write_all(render_comic_info(meta, pages.len()).as_bytes())
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
 
     for (index, page) in pages.iter().enumerate() {
         zip.start_file(page_file_name(index, page), stored)
             .map_err(zip_error)?;
-        zip.write_all(&page.bytes).map_err(VaultError::from)?;
+        zip.write_all(&page.bytes).map_err(FeroError::from)?;
     }
 
     zip.finish().map_err(zip_error)?;
@@ -208,8 +208,8 @@ fn render_comic_info(meta: &CbzMeta, page_count: usize) -> String {
 }
 
 /// Converts a zip error into the shared vault error type.
-fn zip_error(error: zip::result::ZipError) -> VaultError {
-    VaultError::Io(format!("cbz write failed: {error}"))
+fn zip_error(error: zip::result::ZipError) -> FeroError {
+    FeroError::Io(format!("cbz write failed: {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ mod tests {
     fn empty_page_list_is_rejected() {
         let target = temp_target("empty");
         let result = write_cbz(&target, &CbzMeta::default(), &[]);
-        assert!(matches!(result, Err(VaultError::InvalidProperty(_))));
+        assert!(matches!(result, Err(FeroError::InvalidProperty(_))));
         assert!(!target.exists());
     }
 

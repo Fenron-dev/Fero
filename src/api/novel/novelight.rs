@@ -22,7 +22,7 @@ use super::{
     absolutize, extract_content, sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo,
     NovelSource, PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Content selectors for chapter pages, in priority order.
 const CHAPTER_CONTENT_SELECTORS: [&str; 3] = [".chapter__content", "#chapter-content", ".content"];
@@ -44,7 +44,7 @@ impl NovelSource for NovelightSource {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let html = Html::parse_document(&body);
         let content = extract_content(&html, &CHAPTER_CONTENT_SELECTORS).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "Novelight-Kapitelinhalt nicht gefunden: {}",
                 chapter.url
             ))
@@ -61,11 +61,11 @@ fn parse_book_page(page_url: &str, body: &str) -> Result<NovelInfo> {
     let html = Html::parse_document(body);
 
     let title = first_text(&html, "h1").ok_or_else(|| {
-        VaultError::ExternalApi(format!("Novelight-Titel nicht gefunden: {page_url}"))
+        FeroError::ExternalApi(format!("Novelight-Titel nicht gefunden: {page_url}"))
     })?;
 
     let chapter_selector = Selector::parse(".chapters a.chapter, a.chapter")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let title_selector = Selector::parse(".title").ok();
 
     let mut chapters = Vec::new();
@@ -92,7 +92,7 @@ fn parse_book_page(page_url: &str, body: &str) -> Result<NovelInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitel auf der Novelight-Seite gefunden: {page_url}"
         )));
     }

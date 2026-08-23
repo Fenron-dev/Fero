@@ -22,7 +22,7 @@ use super::{
     absolutize, generic::extract_best_content, ChapterContent, ChapterRef, NovelInfo, NovelSource,
     PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// NovelUpdates radar adapter.
 pub struct NovelUpdatesSource;
@@ -42,7 +42,7 @@ impl NovelSource for NovelUpdatesSource {
         // the final translator-host URL, which drives per-host rate limiting.
         let (final_url, body) = client.get_text(&chapter.url)?;
         let content = extract_best_content(&body).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "Kapitelinhalt auf der Übersetzer-Seite nicht erkannt: {final_url}"
             ))
         })?;
@@ -55,8 +55,8 @@ impl NovelSource for NovelUpdatesSource {
 
 /// Appends a German hint to NU failures: subscribing at the translator's own
 /// site works via the generic parser and is the reliable path.
-fn with_translator_hint(error: VaultError) -> VaultError {
-    VaultError::ExternalApi(format!(
+fn with_translator_hint(error: FeroError) -> FeroError {
+    FeroError::ExternalApi(format!(
         "{error} — Tipp: Abonniere stattdessen direkt die Seite der \
          Übersetzer-Gruppe (Link in der NovelUpdates-Release-Liste); \
          diese funktioniert meist über den generischen Parser."
@@ -71,7 +71,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
         .or_else(|| first_text(&html, ".seriestitle"))
         .or_else(|| first_text(&html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "NovelUpdates-Serientitel nicht gefunden (Cloudflare-Block?): {page_url}"
             ))
         })?;
@@ -85,9 +85,9 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
         first_text(&html, "#showtranslated").map(|status| status.to_lowercase().contains("yes"));
 
     let row_selector = Selector::parse("table#myTable tr")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let link_selector = Selector::parse("a.chp-release")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -109,7 +109,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Releases auf der NovelUpdates-Seite gefunden: {page_url}"
         )));
     }

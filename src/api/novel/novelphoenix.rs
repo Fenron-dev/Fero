@@ -18,7 +18,7 @@ use super::{
     absolutize, extract_content, og_image, sanitize_to_xhtml, ChapterContent, ChapterRef,
     NovelInfo, NovelSource, PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Content selectors for chapter pages, in priority order.
 const CHAPTER_CONTENT_SELECTORS: [&str; 3] = ["#chapter-container", ".chapter-content", "#content"];
@@ -62,7 +62,7 @@ impl NovelSource for NovelPhoenixSource {
             .retain(|chapter| seen.insert(chapter.url.clone()));
 
         if info.chapters.is_empty() {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "Keine Kapitel auf der Seite gefunden: {final_url}"
             )));
         }
@@ -73,7 +73,7 @@ impl NovelSource for NovelPhoenixSource {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let html = Html::parse_document(&body);
         let content = extract_content(&html, &CHAPTER_CONTENT_SELECTORS).ok_or_else(|| {
-            VaultError::ExternalApi(format!("Kapitelinhalt nicht gefunden: {}", chapter.url))
+            FeroError::ExternalApi(format!("Kapitelinhalt nicht gefunden: {}", chapter.url))
         })?;
         Ok(ChapterContent {
             title: chapter.title.clone(),
@@ -92,7 +92,7 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
     let title = first_text(html, "h1.novel-title")
         .or_else(|| first_text(html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}"))
         })?;
 
     // Genre links; nav entries ("Latest Novels" …) don't use /genre/ URLs.

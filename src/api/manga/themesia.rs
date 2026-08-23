@@ -28,7 +28,7 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Themesia-theme adapter.
 pub struct ThemesiaSource;
@@ -65,13 +65,13 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         .or_else(|| first_text(&html, ".entry-title"))
         .or_else(|| first_text(&html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("Themesia: Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("Themesia: Titel nicht gefunden: {page_url}"))
         })?;
 
     let chapter_selector = Selector::parse("#chapterlist li a, .eplister li a")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let number_selector = Selector::parse(".chapternum")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -99,7 +99,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Themesia: Keine Kapitel gefunden: {page_url}"
         )));
     }
@@ -127,7 +127,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
 fn parse_chapter_images(page_url: &str, body: &str) -> Result<Vec<String>> {
     let html = Html::parse_document(body);
     let selector = Selector::parse("#readerarea img")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let mut images: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -155,7 +155,7 @@ fn parse_chapter_images(page_url: &str, body: &str) -> Result<Vec<String>> {
     }
 
     if images.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Themesia: Keine Seitenbilder im Kapitel gefunden: {page_url}"
         )));
     }

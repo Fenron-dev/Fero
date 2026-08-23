@@ -20,7 +20,7 @@ pub use deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
     TargetSource,
 };
-pub use error::{Result, VaultError};
+pub use error::{Result, FeroError};
 
 /// Starts the Fero desktop shell.
 ///

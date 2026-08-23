@@ -20,7 +20,7 @@
 use scraper::{Html, Selector};
 
 use super::{sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo, NovelSource, PoliteClient};
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// NovelArrow source adapter (browser-window routed).
 pub struct NovelArrowSource;
@@ -32,7 +32,7 @@ impl NovelSource for NovelArrowSource {
 
     fn fetch_novel_info(&self, client: &PoliteClient, url: &str) -> Result<NovelInfo> {
         let slug = novel_slug(url).ok_or_else(|| {
-            VaultError::ExternalApi(format!("NovelArrow-URL ohne Novel-Slug: {url}"))
+            FeroError::ExternalApi(format!("NovelArrow-URL ohne Novel-Slug: {url}"))
         })?;
         // The chapters tab renders the full list in a real browser.
         let chapters_url = format!("{}?tab=chapters", strip_query(url));
@@ -51,7 +51,7 @@ impl NovelSource for NovelArrowSource {
             }
         }
         if chapters.is_empty() {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "Keine Kapitel auf der NovelArrow-Seite gefunden: {url}"
             )));
         }
@@ -97,7 +97,7 @@ impl NovelSource for NovelArrowSource {
         let bytes = client.get_bytes(&chapter.url)?;
         let raw = String::from_utf8_lossy(&bytes);
         let html = extract_flight_chapter(&raw).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "Kapitelinhalt nicht im Seiten-Payload gefunden \
                  (evtl. gesperrtes Premium-Kapitel): {}",
                 chapter.url

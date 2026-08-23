@@ -28,7 +28,7 @@ use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOu
 use crate::deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 use serde::{Deserialize, Serialize};
 use tauri::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
 use tauri::Manager;
@@ -119,7 +119,7 @@ pub(crate) fn run() -> Result<()> {
             },
         )
         .run(tauri::generate_context!())
-        .map_err(|error| VaultError::AppStartup(error.to_string()))
+        .map_err(|error| FeroError::AppStartup(error.to_string()))
 }
 
 /// Routes a single custom-scheme request to its handler and returns the
@@ -448,7 +448,7 @@ pub(crate) fn resolve_vault_root(root_override: Option<&str>) -> Result<Option<P
     if let Some(root) = normalized_override(root_override) {
         let resolved = resolve_existing_root(root)?;
         if !is_authorized_root(&resolved) {
-            return Err(VaultError::InvalidVaultPath(format!(
+            return Err(FeroError::InvalidTarget(format!(
                 "vault root is not authorized: {}",
                 resolved.display()
             )));
@@ -490,19 +490,19 @@ fn load_saved_vault_root() -> Result<Option<PathBuf>> {
 
 fn resolve_existing_root(root: PathBuf) -> Result<PathBuf> {
     if !root.exists() {
-        return Err(VaultError::InvalidVaultPath(format!(
+        return Err(FeroError::InvalidTarget(format!(
             "vault root does not exist: {}",
             root.display()
         )));
     }
 
-    fs::canonicalize(&root).map_err(VaultError::from)
+    fs::canonicalize(&root).map_err(FeroError::from)
 }
 
 fn app_state_path() -> Result<PathBuf> {
     let home = env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
-        .ok_or_else(|| VaultError::Io("home directory not available".to_string()))?;
+        .ok_or_else(|| FeroError::Io("home directory not available".to_string()))?;
 
     Ok(PathBuf::from(home).join(".fero").join("state.json"))
 }
@@ -513,8 +513,8 @@ fn load_app_state() -> Result<AppState> {
         return Ok(AppState::default());
     }
 
-    let raw = fs::read_to_string(&path).map_err(VaultError::from)?;
-    serde_json::from_str(&raw).map_err(|error| VaultError::Serialization(error.to_string()))
+    let raw = fs::read_to_string(&path).map_err(FeroError::from)?;
+    serde_json::from_str(&raw).map_err(|error| FeroError::Serialization(error.to_string()))
 }
 
 fn auto_detect_vault_roots() -> Vec<PathBuf> {
@@ -931,7 +931,7 @@ impl Workspace {
     /// not silently land somewhere else.
     ///
     /// # Errors
-    /// [`VaultError::InvalidVaultPath`] carrying the reason to show the user.
+    /// [`FeroError::InvalidTarget`] carrying the reason to show the user.
     pub(crate) fn delivery_parent(
         &self,
         kind: MediaKind,
@@ -941,7 +941,7 @@ impl Workspace {
         match resolve_target(own, kind, &self.targets, &self.store) {
             TargetResolution::Resolved { parent, .. } => Ok(parent),
             TargetResolution::NeedsChoice { reason, .. } => {
-                Err(VaultError::InvalidVaultPath(reason))
+                Err(FeroError::InvalidTarget(reason))
             }
         }
     }
@@ -955,11 +955,11 @@ impl Workspace {
     /// online — the cache belongs to Fero, not to the collection.
     ///
     /// # Errors
-    /// [`VaultError::InvalidProperty`] if the id is not a well-formed
+    /// [`FeroError::InvalidProperty`] if the id is not a well-formed
     /// subscription id; it becomes a directory name.
     pub(crate) fn chapter_cache(&self, subscription_id: &str) -> Result<PathBuf> {
         if !is_valid_subscription_id(subscription_id) {
-            return Err(VaultError::InvalidProperty(format!(
+            return Err(FeroError::InvalidProperty(format!(
                 "invalid subscription id: {subscription_id}"
             )));
         }
@@ -1105,12 +1105,12 @@ pub(crate) fn load_target_settings(store: &Path) -> TargetSettings {
 /// Persists the configured targets.
 ///
 /// # Errors
-/// [`VaultError::Io`] when the file cannot be written.
+/// [`FeroError::Io`] when the file cannot be written.
 pub(crate) fn save_target_settings(store: &Path, settings: &TargetSettings) -> Result<()> {
     let body = serde_json::to_string_pretty(settings)
-        .map_err(|error| VaultError::Serialization(error.to_string()))?;
-    fs::create_dir_all(store).map_err(VaultError::from)?;
-    fs::write(store.join(TARGET_SETTINGS_FILE), body).map_err(VaultError::from)
+        .map_err(|error| FeroError::Serialization(error.to_string()))?;
+    fs::create_dir_all(store).map_err(FeroError::from)?;
+    fs::write(store.join(TARGET_SETTINGS_FILE), body).map_err(FeroError::from)
 }
 
 /// Resolves both locations, or reports which one is missing.
@@ -1823,7 +1823,7 @@ fn check_one_subscription(
     job_id: &str,
 ) -> Result<usize> {
     if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
-        return Err(VaultError::ExternalApi(reason));
+        return Err(FeroError::ExternalApi(reason));
     }
     let source = detect_source(&subscription.url);
     debug_log(&format!(
@@ -1904,7 +1904,7 @@ fn check_one_subscription(
     let novel_dir = webnovel_folder(&parent, subscription);
     let cache_dir = ws.chapter_cache(&subscription.id)?;
     migrate_chapter_cache(&novel_dir, &cache_dir);
-    fs::create_dir_all(&cache_dir).map_err(VaultError::from)?;
+    fs::create_dir_all(&cache_dir).map_err(FeroError::from)?;
 
     // Fetch the cover once; failures are non-fatal (text matters more).
     let cover_added = ensure_novel_cover(client, subscription, &novel_dir);
@@ -1925,7 +1925,7 @@ fn check_one_subscription(
 
     let mut downloaded_indices: Vec<u32> = Vec::new();
     let mut repaired_chapters = 0usize;
-    let mut fetch_error: Option<VaultError> = None;
+    let mut fetch_error: Option<FeroError> = None;
     let mut consecutive_failures = 0usize;
     let mut skipped_chapters = 0usize;
     for (position, chapter_position) in pending.iter().enumerate() {
@@ -2001,12 +2001,12 @@ fn check_one_subscription(
             xhtml: content.xhtml,
         };
         let cache_json = serde_json::to_string(&cached)
-            .map_err(|error| VaultError::Serialization(error.to_string()))?;
+            .map_err(|error| FeroError::Serialization(error.to_string()))?;
         fs::write(
             cache_dir.join(chapter_cache_name(chapter.index)),
             cache_json,
         )
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
         chapter.downloaded_at_unix = Some(unix_now());
         chapter.placeholder = is_placeholder;
         if was_placeholder && !is_placeholder {
@@ -2257,9 +2257,9 @@ fn load_cached_chapters(cache_dir: &Path, indices: &[u32]) -> Result<Vec<EpubCha
     let mut chapters = Vec::with_capacity(sorted.len());
     for index in sorted {
         let path = cache_dir.join(chapter_cache_name(index));
-        let raw = fs::read_to_string(&path).map_err(VaultError::from)?;
+        let raw = fs::read_to_string(&path).map_err(FeroError::from)?;
         let cached: CachedChapter = serde_json::from_str(&raw)
-            .map_err(|error| VaultError::Serialization(error.to_string()))?;
+            .map_err(|error| FeroError::Serialization(error.to_string()))?;
         chapters.push(EpubChapter {
             title: cached.title,
             // Chapters are sanitized at download time already; sanitizing
@@ -3425,10 +3425,10 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
     let handle = APP_HANDLE
         .get()
         .cloned()
-        .ok_or_else(|| VaultError::ExternalApi("App-Fenster noch nicht bereit.".to_string()))?;
+        .ok_or_else(|| FeroError::ExternalApi("App-Fenster noch nicht bereit.".to_string()))?;
     let target = url
         .parse::<tauri::Url>()
-        .map_err(|_| VaultError::ExternalApi(format!("URL ungültig: {url}")))?;
+        .map_err(|_| FeroError::ExternalApi(format!("URL ungültig: {url}")))?;
 
     debug_log(&format!("render: navigate → {url}"));
     let nav_url = target.clone();
@@ -3447,7 +3447,7 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
                 continue;
             }
             debug_log("render: FAIL Fenster nicht vorhanden");
-            return Err(VaultError::ExternalApi(
+            return Err(FeroError::ExternalApi(
                 "Browserfenster wurde geschlossen.".to_string(),
             ));
         }
@@ -3467,7 +3467,7 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
             );
             if start.elapsed() >= std::time::Duration::from_secs(CHALLENGE_WAIT_SECS) {
                 debug_log("render: FAIL Challenge-Timeout");
-                return Err(VaultError::ExternalApi(
+                return Err(FeroError::ExternalApi(
                     "Zeitüberschreitung bei der Sicherheitsprüfung im Fenster.".to_string(),
                 ));
             }
@@ -3483,7 +3483,7 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
             }
             if total > MAX_RELAY_HEX_LEN {
                 debug_log(&format!("render: FAIL Payload zu groß ({total} Zeichen)"));
-                return Err(VaultError::ExternalApi(
+                return Err(FeroError::ExternalApi(
                     "Die Seite hat eine unerwartet große Antwort geliefert.".to_string(),
                 ));
             }
@@ -3533,7 +3533,7 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
                 // Content changed mid-pull (SPA still rendering) — retry.
                 if start.elapsed() >= std::time::Duration::from_secs(RENDER_TIMEOUT_SECS) {
                     debug_log("render: FAIL unvollständig nach Timeout");
-                    return Err(VaultError::ExternalApi(
+                    return Err(FeroError::ExternalApi(
                         "Seite konnte nicht vollständig gelesen werden.".to_string(),
                     ));
                 }
@@ -3541,7 +3541,7 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
             }
             let bytes = hex_decode(&hex).ok_or_else(|| {
                 debug_log("render: FAIL hex-decode");
-                VaultError::ExternalApi("Ungültige Daten aus dem Browserfenster.".to_string())
+                FeroError::ExternalApi("Ungültige Daten aus dem Browserfenster.".to_string())
             })?;
             let html = if mode == "gz" {
                 use std::io::Read;
@@ -3552,12 +3552,12 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
                 let mut text = String::new();
                 decoder.read_to_string(&mut text).map_err(|e| {
                     debug_log(&format!("render: FAIL gunzip: {e}"));
-                    VaultError::ExternalApi(format!("Dekomprimierung fehlgeschlagen: {e}"))
+                    FeroError::ExternalApi(format!("Dekomprimierung fehlgeschlagen: {e}"))
                 })?;
                 text
             } else {
                 String::from_utf8(bytes)
-                    .map_err(|e| VaultError::ExternalApi(format!("Ungültiges UTF-8: {e}")))?
+                    .map_err(|e| FeroError::ExternalApi(format!("Ungültiges UTF-8: {e}")))?
             };
             debug_log(&format!("render: OK html.len={}", html.len()));
             return Ok(html);
@@ -3571,7 +3571,7 @@ pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
         };
         if start.elapsed() >= std::time::Duration::from_secs(budget) {
             debug_log(&format!("render: FAIL Timeout (letztes meta='{meta}')"));
-            return Err(VaultError::ExternalApi(
+            return Err(FeroError::ExternalApi(
                 "Seite konnte im Browserfenster nicht gerendert werden (Timeout).".to_string(),
             ));
         }

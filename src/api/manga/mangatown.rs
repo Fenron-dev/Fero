@@ -24,7 +24,7 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// MangaTown adapter.
 pub struct MangaTownSource;
@@ -55,7 +55,7 @@ impl MangaSource for MangaTownSource {
         for page_url in page_urls.iter().skip(1) {
             let (page_final_url, page_body) = client.get_text(page_url)?;
             let Some(src) = parse_page_image(&page_final_url, &page_body) else {
-                return Err(VaultError::ExternalApi(format!(
+                return Err(FeroError::ExternalApi(format!(
                     "Seitenbild nicht gefunden: {page_url}"
                 )));
             };
@@ -63,7 +63,7 @@ impl MangaSource for MangaTownSource {
         }
 
         if images.is_empty() {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "Keine Seiten im Kapitel gefunden: {}",
                 chapter.url
             )));
@@ -80,7 +80,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         .or_else(|| first_text(&html, ".detail_info h1"))
         .or_else(|| first_text(&html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("MangaTown-Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("MangaTown-Titel nicht gefunden: {page_url}"))
         })?;
 
     let mut chapters = parse_chapter_options(page_url, &html);
@@ -88,7 +88,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         chapters = parse_chapter_links(page_url, &html);
     }
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitel auf der MangaTown-Seite gefunden: {page_url}"
         )));
     }
@@ -167,7 +167,7 @@ fn parse_chapter_links(page_url: &str, html: &Html) -> Vec<MangaChapterRef> {
 fn parse_page_urls(page_url: &str, body: &str) -> Result<Vec<String>> {
     let html = Html::parse_document(body);
     let selector = Selector::parse(".page_select option")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let mut urls = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -186,7 +186,7 @@ fn parse_page_urls(page_url: &str, body: &str) -> Result<Vec<String>> {
     }
 
     if urls.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Seitenliste nicht gefunden: {page_url}"
         )));
     }

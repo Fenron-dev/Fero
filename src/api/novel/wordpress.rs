@@ -22,7 +22,7 @@ use super::{
     absolutize, extract_content, host_of, looks_like_chapter_text, sanitize_to_xhtml,
     ChapterContent, ChapterRef, NovelInfo, NovelSource, PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Content selectors for chapter pages, in priority order.
 /// Fictioneer (`#chapter-content`) first, then classic WordPress bodies.
@@ -69,7 +69,7 @@ impl NovelSource for WordPressSource {
     fn fetch_chapter(&self, client: &PoliteClient, chapter: &ChapterRef) -> Result<ChapterContent> {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let content = extract_chapter_content(&body).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "WordPress-Kapitelinhalt nicht gefunden: {}",
                 chapter.url
             ))
@@ -209,11 +209,11 @@ fn parse_classic_wordpress(page_url: &str, html: &Html) -> Result<NovelInfo> {
     let title = first_text(html, "h1.entry-title")
         .or_else(|| first_text(html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}"))
         })?;
 
     let link_selector = Selector::parse("div.entry-content a[href]")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -237,7 +237,7 @@ fn parse_classic_wordpress(page_url: &str, html: &Html) -> Result<NovelInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitel-Links auf der Seite gefunden: {page_url}"
         )));
     }

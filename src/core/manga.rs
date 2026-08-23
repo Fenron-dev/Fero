@@ -44,7 +44,7 @@ pub fn subscription_file_path(system_dir: &Path, subscription_id: &str) -> PathB
 /// Loads a manga subscription by id, if one exists.
 ///
 /// # Errors
-/// - `VaultError::InvalidProperty` if `subscription_id` is not a generated id
+/// - `FeroError::InvalidProperty` if `subscription_id` is not a generated id
 pub fn load_subscription(system_dir: &Path, subscription_id: &str) -> Result<Option<Subscription>> {
     subscription::load_subscription(system_dir, STORE, subscription_id)
 }
@@ -52,7 +52,7 @@ pub fn load_subscription(system_dir: &Path, subscription_id: &str) -> Result<Opt
 /// Persists a manga subscription, creating the store directory if needed.
 ///
 /// # Errors
-/// - `VaultError::InvalidProperty` if the record carries a malformed id
+/// - `FeroError::InvalidProperty` if the record carries a malformed id
 pub fn save_subscription(system_dir: &Path, subscription: &Subscription) -> Result<()> {
     subscription::save_subscription(system_dir, STORE, subscription)
 }

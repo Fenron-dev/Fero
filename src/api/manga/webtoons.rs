@@ -25,7 +25,7 @@ use scraper::{Html, Selector};
 
 use super::{tidy_text, MangaChapterRef, MangaInfo, MangaSource, PageImage};
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Referer sent with every page-image request.
 const IMAGE_REFERER: &str = "https://www.webtoons.com/";
@@ -112,11 +112,11 @@ fn parse_list_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         .or_else(|| first_text(&html, "h1.subj"))
         .or_else(|| first_text(&html, ".subj"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("Webtoons-Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("Webtoons-Titel nicht gefunden: {page_url}"))
         })?;
 
     let link_selector = Selector::parse("a[href*='viewer?title_no=']")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -172,7 +172,7 @@ fn parse_list_page(page_url: &str, body: &str) -> Result<MangaInfo> {
 fn parse_viewer_images(page_url: &str, body: &str) -> Result<Vec<String>> {
     let html = Html::parse_document(body);
     let selector = Selector::parse("#_imageList img")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     let images: Vec<String> = html
         .select(&selector)
@@ -187,7 +187,7 @@ fn parse_viewer_images(page_url: &str, body: &str) -> Result<Vec<String>> {
         .collect();
 
     if images.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Bilder im Webtoons-Viewer gefunden \
              (Episode kostenpflichtig oder nicht verfügbar?): {page_url}"
         )));

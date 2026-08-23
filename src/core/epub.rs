@@ -23,7 +23,7 @@ use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// One chapter to embed into the EPUB.
 #[derive(Debug, Clone)]
@@ -85,20 +85,20 @@ pub struct EpubMeta {
 /// - `chapters` – Chapters in reading order; bodies must be valid XHTML
 ///
 /// # Errors
-/// - `VaultError::InvalidProperty` if `chapters` is empty
-/// - `VaultError::Io` on filesystem or zip write failures
+/// - `FeroError::InvalidProperty` if `chapters` is empty
+/// - `FeroError::Io` on filesystem or zip write failures
 pub fn write_epub(target: &Path, meta: &EpubMeta, chapters: &[EpubChapter]) -> Result<()> {
     if chapters.is_empty() {
-        return Err(VaultError::InvalidProperty(
+        return Err(FeroError::InvalidProperty(
             "cannot write an EPUB without chapters".to_string(),
         ));
     }
 
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(VaultError::from)?;
+        std::fs::create_dir_all(parent).map_err(FeroError::from)?;
     }
 
-    let file = File::create(target).map_err(VaultError::from)?;
+    let file = File::create(target).map_err(FeroError::from)?;
     let mut zip = ZipWriter::new(file);
 
     // The `mimetype` entry must be first and stored uncompressed so readers
@@ -108,35 +108,35 @@ pub fn write_epub(target: &Path, meta: &EpubMeta, chapters: &[EpubChapter]) -> R
 
     zip.start_file("mimetype", stored).map_err(zip_error)?;
     zip.write_all(b"application/epub+zip")
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
 
     zip.start_file("META-INF/container.xml", deflated)
         .map_err(zip_error)?;
     zip.write_all(CONTAINER_XML.as_bytes())
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
 
     zip.start_file("OEBPS/content.opf", deflated)
         .map_err(zip_error)?;
     zip.write_all(render_opf(meta, chapters).as_bytes())
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
 
     zip.start_file("OEBPS/nav.xhtml", deflated)
         .map_err(zip_error)?;
     zip.write_all(render_nav(meta, chapters).as_bytes())
-        .map_err(VaultError::from)?;
+        .map_err(FeroError::from)?;
 
     if let Some(cover) = &meta.cover {
         // Images are already compressed; store them without re-deflating.
         zip.start_file(format!("OEBPS/cover.{}", cover.extension()), stored)
             .map_err(zip_error)?;
-        zip.write_all(&cover.bytes).map_err(VaultError::from)?;
+        zip.write_all(&cover.bytes).map_err(FeroError::from)?;
     }
 
     for (index, chapter) in chapters.iter().enumerate() {
         zip.start_file(chapter_file_name(index), deflated)
             .map_err(zip_error)?;
         zip.write_all(render_chapter(chapter).as_bytes())
-            .map_err(VaultError::from)?;
+            .map_err(FeroError::from)?;
     }
 
     zip.finish().map_err(zip_error)?;
@@ -182,8 +182,8 @@ fn chapter_href(index: usize) -> String {
     format!("chapter_{:04}.xhtml", index + 1)
 }
 
-fn zip_error(error: zip::result::ZipError) -> VaultError {
-    VaultError::Io(format!("epub zip write failed: {error}"))
+fn zip_error(error: zip::result::ZipError) -> FeroError {
+    FeroError::Io(format!("epub zip write failed: {error}"))
 }
 
 fn render_opf(meta: &EpubMeta, chapters: &[EpubChapter]) -> String {

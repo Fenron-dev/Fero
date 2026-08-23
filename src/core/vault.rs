@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 const SYSTEM_DIR: &str = ".fero";
 const INBOX_DIR: &str = "Inbox";
@@ -26,7 +26,7 @@ impl RelativePath {
         let path = path.as_ref();
 
         if path.as_os_str().is_empty() {
-            return Err(VaultError::InvalidRelativePath("path is empty".to_string()));
+            return Err(FeroError::InvalidPath("path is empty".to_string()));
         }
 
         let mut normalized = PathBuf::new();
@@ -36,12 +36,12 @@ impl RelativePath {
                 Component::Normal(part) => normalized.push(part),
                 Component::CurDir => {}
                 Component::ParentDir => {
-                    return Err(VaultError::InvalidRelativePath(
+                    return Err(FeroError::InvalidPath(
                         "parent directory segments are not allowed".to_string(),
                     ));
                 }
                 Component::RootDir | Component::Prefix(_) => {
-                    return Err(VaultError::InvalidRelativePath(
+                    return Err(FeroError::InvalidPath(
                         "absolute paths are not allowed".to_string(),
                     ));
                 }
@@ -49,7 +49,7 @@ impl RelativePath {
         }
 
         if normalized.as_os_str().is_empty() {
-            return Err(VaultError::InvalidRelativePath(
+            return Err(FeroError::InvalidPath(
                 "path normalizes to an empty value".to_string(),
             ));
         }
@@ -112,7 +112,7 @@ impl Vault {
         let root = root.into();
 
         if root.as_os_str().is_empty() {
-            return Err(VaultError::InvalidVaultPath(
+            return Err(FeroError::InvalidTarget(
                 "vault root is empty".to_string(),
             ));
         }
@@ -175,13 +175,13 @@ impl Vault {
         let absolute = absolute.as_ref();
 
         if !absolute.starts_with(&self.root) {
-            return Err(VaultError::InvalidRelativePath(
+            return Err(FeroError::InvalidPath(
                 "path does not live inside this vault".to_string(),
             ));
         }
 
         let relative = absolute.strip_prefix(&self.root).map_err(|error| {
-            VaultError::InvalidRelativePath(format!("could not strip vault root: {error}"))
+            FeroError::InvalidPath(format!("could not strip vault root: {error}"))
         })?;
 
         RelativePath::new(relative)
@@ -207,8 +207,8 @@ impl Vault {
     /// vault.
     ///
     /// # Errors
-    /// - `VaultError::InvalidRelativePath` if the path escapes the vault
-    /// - `VaultError::Io` if the path cannot be canonicalized (e.g. missing)
+    /// - `FeroError::InvalidPath` if the path escapes the vault
+    /// - `FeroError::Io` if the path cannot be canonicalized (e.g. missing)
     pub fn resolve_existing<P: AsRef<Path>>(&self, relative: P) -> Result<PathBuf> {
         let candidate = self.resolve(relative)?;
         let canonical = std::fs::canonicalize(&candidate)?;
@@ -225,7 +225,7 @@ impl Vault {
         if absolute.starts_with(&root) {
             return Ok(());
         }
-        Err(VaultError::InvalidRelativePath(format!(
+        Err(FeroError::InvalidPath(format!(
             "path leaves the vault: {}",
             absolute.display()
         )))
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn rejects_parent_directory_segments() {
         let error = RelativePath::new("../escape").expect_err("parent segments must be rejected");
-        assert!(matches!(error, VaultError::InvalidRelativePath(_)));
+        assert!(matches!(error, FeroError::InvalidPath(_)));
     }
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
         let error = vault
             .ensure_inside(Path::new("/etc/passwd"))
             .expect_err("outside paths must be rejected");
-        assert!(matches!(error, VaultError::InvalidRelativePath(_)));
+        assert!(matches!(error, FeroError::InvalidPath(_)));
     }
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
             let error = vault
                 .resolve_existing("link.txt")
                 .expect_err("symlink out of the vault must be rejected");
-            assert!(matches!(error, VaultError::InvalidRelativePath(_)));
+            assert!(matches!(error, FeroError::InvalidPath(_)));
         }
 
         std::fs::remove_dir_all(&base).ok();

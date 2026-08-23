@@ -6,7 +6,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 const DEFAULT_ENDPOINT: &str = "https://graphql.anilist.co";
 const ANILIST_MEDIA_QUERY: &str = r#"
@@ -445,7 +445,7 @@ impl AniListClient {
     /// - `Ok(None)` – AniList knows no series under that name
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` on transport failures or non-2xx responses
+    /// - `FeroError::ExternalApi` on transport failures or non-2xx responses
     pub fn search_manga(&self, search: &str) -> Result<Option<AniListNovelMetadata>> {
         self.search_manga_shaped(ANILIST_MANGA_QUERY, search)
     }
@@ -459,7 +459,7 @@ impl AniListClient {
         let client = Client::builder()
             .timeout(Duration::from_secs(12))
             .build()
-            .map_err(|error| VaultError::ExternalApi(error.to_string()))?;
+            .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
 
         let mut request = client
             .post(&self.endpoint)
@@ -477,9 +477,9 @@ impl AniListClient {
         let response = request
             .body(body)
             .send()
-            .map_err(|error| VaultError::ExternalApi(error.to_string()))?;
+            .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
         if !response.status().is_success() {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "http {} from AniList",
                 response.status()
             )));
@@ -487,7 +487,7 @@ impl AniListClient {
 
         let payload: AniListNovelResponse = response
             .json()
-            .map_err(|error| VaultError::ExternalApi(error.to_string()))?;
+            .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
         let media = payload
             .data
             .and_then(|data| data.page)
@@ -538,7 +538,7 @@ impl AniListClient {
         let client = Client::builder()
             .timeout(Duration::from_secs(12))
             .build()
-            .map_err(|error| VaultError::ExternalApi(error.to_string()))?;
+            .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
 
         let mut request = client
             .post(&self.endpoint)
@@ -551,10 +551,10 @@ impl AniListClient {
         let response = request
             .body(Self::build_search_results_query(search, adult, 1, per_page))
             .send()
-            .map_err(|error| VaultError::ExternalApi(error.to_string()))?;
+            .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "http {} from AniList",
                 response.status()
             )));
@@ -562,7 +562,7 @@ impl AniListClient {
 
         let payload: AniListGraphQlSearchResponse = response
             .json()
-            .map_err(|error| VaultError::ExternalApi(error.to_string()))?;
+            .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
 
         if let Some(errors) = payload.errors {
             let message = errors
@@ -570,7 +570,7 @@ impl AniListClient {
                 .map(|error| error.message)
                 .collect::<Vec<_>>()
                 .join("; ");
-            return Err(VaultError::ExternalApi(message));
+            return Err(FeroError::ExternalApi(message));
         }
 
         Ok(payload

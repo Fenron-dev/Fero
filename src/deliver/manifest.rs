@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::deliver::targets::MediaKind;
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// File name of the manifest inside a work folder.
 pub const MANIFEST_FILE: &str = "fero.info.json";
@@ -154,13 +154,13 @@ pub fn load(work_dir: &Path) -> Option<WorkManifest> {
 /// Writes the manifest into a work folder, creating the folder if needed.
 ///
 /// # Errors
-/// - [`VaultError::Serialization`] if the manifest cannot be encoded
-/// - [`VaultError::Io`] if the folder or file cannot be written
+/// - [`FeroError::Serialization`] if the manifest cannot be encoded
+/// - [`FeroError::Io`] if the folder or file cannot be written
 pub fn save(work_dir: &Path, manifest: &WorkManifest) -> Result<()> {
     let body = serde_json::to_string_pretty(manifest)
-        .map_err(|error| VaultError::Serialization(error.to_string()))?;
-    std::fs::create_dir_all(work_dir).map_err(VaultError::from)?;
-    std::fs::write(manifest_path(work_dir), body).map_err(VaultError::from)
+        .map_err(|error| FeroError::Serialization(error.to_string()))?;
+    std::fs::create_dir_all(work_dir).map_err(FeroError::from)?;
+    std::fs::write(manifest_path(work_dir), body).map_err(FeroError::from)
 }
 
 /// Loads the manifest for a work, or starts a fresh one.

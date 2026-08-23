@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::api::novel::PoliteClient;
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Autocomplete endpoint; `q` is appended URL-encoded.
 const AUTOCOMPLETE_URL: &str = "https://www.goodreads.com/book/auto_complete?format=json&q=";
@@ -54,7 +54,7 @@ impl GoodreadsClient {
     /// returned.
     ///
     /// # Errors
-    /// - `VaultError::ExternalApi` when the search endpoint is unreachable
+    /// - `FeroError::ExternalApi` when the search endpoint is unreachable
     pub fn search_book(
         client: &PoliteClient,
         title: &str,
@@ -64,7 +64,7 @@ impl GoodreadsClient {
         let (_final_url, body) = client.get_text(&url)?;
 
         let hits: Vec<AutoCompleteHit> = serde_json::from_str(&body)
-            .map_err(|e| VaultError::ExternalApi(format!("Goodreads-Suche unlesbar: {e}")))?;
+            .map_err(|e| FeroError::ExternalApi(format!("Goodreads-Suche unlesbar: {e}")))?;
         let Some(hit) = hits.into_iter().next() else {
             return Ok(None);
         };

@@ -22,7 +22,7 @@ use super::{
     absolutize, host_of, looks_like_chapter_text, sanitize_to_xhtml, ChapterContent, ChapterRef,
     NovelInfo, NovelSource, PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Candidate content selectors for chapter pages.
 const CONTENT_CANDIDATES: [&str; 6] = [
@@ -54,7 +54,7 @@ impl NovelSource for GenericSource {
     fn fetch_chapter(&self, client: &PoliteClient, chapter: &ChapterRef) -> Result<ChapterContent> {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let content = extract_best_content(&body).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "Kapitelinhalt konnte nicht erkannt werden: {}",
                 chapter.url
             ))
@@ -147,7 +147,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
     let title = first_heading(&html).unwrap_or_else(|| page_url.to_string());
 
     let link_selector = Selector::parse("a[href]")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
     // Group same-host chapter-looking links by their URL path prefix so
     // chapter lists ("/novel/ch-1", "/novel/ch-2") cluster together and
@@ -182,7 +182,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
         .unwrap_or_default();
 
     if chapters.len() < 2 {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitelliste erkannt (generischer Parser): {page_url}"
         )));
     }

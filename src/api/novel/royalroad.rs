@@ -16,7 +16,7 @@ use super::{
     absolutize, extract_content, sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo,
     NovelSource, PoliteClient,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Content selectors for chapter pages, in priority order.
 const CHAPTER_CONTENT_SELECTORS: [&str; 2] =
@@ -39,7 +39,7 @@ impl NovelSource for RoyalRoadSource {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let html = Html::parse_document(&body);
         let content = extract_content(&html, &CHAPTER_CONTENT_SELECTORS).ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "RoyalRoad-Kapitelinhalt nicht gefunden: {}",
                 chapter.url
             ))
@@ -58,7 +58,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
     let title = select_text(&html, "div.fic-header h1")
         .or_else(|| select_text(&html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("RoyalRoad-Titel nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("RoyalRoad-Titel nicht gefunden: {page_url}"))
         })?;
     let author = select_text(&html, "div.fic-header h4 a").or_else(|| select_text(&html, "h4 a"));
     // og:image is the most stable cover source; the header <img> is a
@@ -76,7 +76,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
         .map(|info| info.to_uppercase().contains(">COMPLETED<"));
 
     let chapter_selector = Selector::parse("table#chapters a[href*='/chapter/']")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for link in html.select(&chapter_selector) {
@@ -98,7 +98,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitel auf der RoyalRoad-Seite gefunden: {page_url}"
         )));
     }

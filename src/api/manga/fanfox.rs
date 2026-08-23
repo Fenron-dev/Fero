@@ -31,7 +31,7 @@ use super::{
     MangaSource, PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 /// Header that reveals the complete chapter list.
 const ADULT_HEADERS: [(&str, &str); 1] = [("Cookie", "isAdult=1")];
@@ -94,7 +94,7 @@ impl MangaSource for FanFoxSource {
         }
 
         if images.is_empty() {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "Keine Seitenbilder ermittelt: {}",
                 chapter.url
             )));
@@ -123,13 +123,13 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     let title = first_text(&html, ".detail-info-right-title-font")
         .or_else(|| first_text(&html, "h1"))
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!(
+            FeroError::ExternalApi(format!(
                 "FanFox-Titel nicht gefunden (Cloudflare-Block?): {page_url}"
             ))
         })?;
 
     let link_selector = Selector::parse("ul.detail-main-list a")
-        .map_err(|e| VaultError::ExternalApi(format!("selector parse error: {e}")))?;
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let mut chapters = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for link in html.select(&link_selector) {
@@ -156,7 +156,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     }
 
     if chapters.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Keine Kapitel auf der FanFox-Seite gefunden: {page_url}"
         )));
     }
@@ -183,15 +183,15 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
 /// Extracts chapter id, page count, and the decoded key from a chapter page.
 fn parse_chapter_context(page_url: &str, body: &str) -> Result<ChapterContext> {
     let chapter_id = js_number(body, "chapterid").ok_or_else(|| {
-        VaultError::ExternalApi(format!("FanFox: chapterid nicht gefunden: {page_url}"))
+        FeroError::ExternalApi(format!("FanFox: chapterid nicht gefunden: {page_url}"))
     })?;
     let image_count: u32 = js_number(body, "imagecount")
         .and_then(|value| value.parse().ok())
         .ok_or_else(|| {
-            VaultError::ExternalApi(format!("FanFox: imagecount nicht gefunden: {page_url}"))
+            FeroError::ExternalApi(format!("FanFox: imagecount nicht gefunden: {page_url}"))
         })?;
     let key = extract_key(body).ok_or_else(|| {
-        VaultError::ExternalApi(format!(
+        FeroError::ExternalApi(format!(
             "FanFox: Kapitel-Schlüssel nicht lesbar: {page_url}"
         ))
     })?;
@@ -234,17 +234,17 @@ fn extract_key(body: &str) -> Option<String> {
 /// Parses one `chapterfun.ashx` response into absolute image URLs.
 fn parse_page_batch(base_url: &str, script: &str) -> Result<Vec<String>> {
     let unpacked = packed::unpack(script).ok_or_else(|| {
-        VaultError::ExternalApi(
+        FeroError::ExternalApi(
             "FanFox: Antwort des Bild-Endpunkts nicht entschlüsselbar (Seite geändert?)"
                 .to_string(),
         )
     })?;
 
     let prefix = js_string_value(&unpacked, "pix").ok_or_else(|| {
-        VaultError::ExternalApi("FanFox: Bildpfad (pix) fehlt in der Antwort".to_string())
+        FeroError::ExternalApi("FanFox: Bildpfad (pix) fehlt in der Antwort".to_string())
     })?;
     let values = js_array_values(&unpacked, "pvalue").ok_or_else(|| {
-        VaultError::ExternalApi("FanFox: Bildliste (pvalue) fehlt in der Antwort".to_string())
+        FeroError::ExternalApi("FanFox: Bildliste (pvalue) fehlt in der Antwort".to_string())
     })?;
 
     Ok(values

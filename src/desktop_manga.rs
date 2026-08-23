@@ -50,7 +50,7 @@ use crate::desktop::{
     debug_log, extract_query_value, resolve_workspace, safe_folder_segment, sanitize_path_segment,
     Workspace,
 };
-use crate::error::{Result, VaultError};
+use crate::error::{Result, FeroError};
 
 // ---------------------------------------------------------------------------
 // Job registry
@@ -933,7 +933,7 @@ fn check_one(
     job_id: &str,
 ) -> Result<usize> {
     if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
-        return Err(VaultError::ExternalApi(reason));
+        return Err(FeroError::ExternalApi(reason));
     }
     let source = manga::require_source(&subscription.url)?;
     debug_log(&format!(
@@ -971,7 +971,7 @@ fn check_one(
 
     let parent = ws.delivery_parent(MediaKind::Manga, subscription)?;
     let series_dir = manga_folder(&parent, subscription);
-    fs::create_dir_all(&series_dir).map_err(VaultError::from)?;
+    fs::create_dir_all(&series_dir).map_err(FeroError::from)?;
     ensure_cover(client, subscription, &series_dir);
 
     let mut pending: Vec<usize> = subscription
@@ -991,7 +991,7 @@ fn check_one(
     let mut downloaded = 0usize;
     let mut skipped = 0usize;
     let mut consecutive_failures = 0usize;
-    let mut fetch_error: Option<VaultError> = None;
+    let mut fetch_error: Option<FeroError> = None;
 
     for (position, chapter_position) in pending.iter().enumerate() {
         update_job(job_id, |status| {
@@ -1076,7 +1076,7 @@ fn download_chapter(
 ) -> Result<u32> {
     let pages = source.fetch_chapter_pages(client, chapter)?;
     if pages.is_empty() {
-        return Err(VaultError::ExternalApi(format!(
+        return Err(FeroError::ExternalApi(format!(
             "Kapitel ohne Seiten: {}",
             chapter.url
         )));
@@ -1089,7 +1089,7 @@ fn download_chapter(
 
         let bytes = client.get_image(&page.url, page.referer.as_deref())?;
         if bytes.len() > MAX_PAGE_BYTES {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "Seite {} ist unerwartet groß ({} MB): {}",
                 position + 1,
                 bytes.len() / (1024 * 1024),
@@ -1099,7 +1099,7 @@ fn download_chapter(
         // An HTML error page served instead of an image would otherwise end up
         // in the archive as a corrupt "page".
         let Some(media_type) = detect_image_media_type(&bytes) else {
-            return Err(VaultError::ExternalApi(format!(
+            return Err(FeroError::ExternalApi(format!(
                 "Seite {} ist kein gültiges Bild: {}",
                 position + 1,
                 page.url
