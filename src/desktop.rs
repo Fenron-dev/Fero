@@ -135,6 +135,11 @@ fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             APP_JS,
         ),
         "/styles.css" => response(StatusCode::OK, "text/css; charset=utf-8", STYLES_CSS),
+        "/api/targets" => json_response(StatusCode::OK, &build_targets_response()),
+        "/api/targets/save" => json_response(
+            StatusCode::OK,
+            &build_save_targets_response(request.body()),
+        ),
         "/api/anilist-search" => json_response(
             StatusCode::OK,
             &build_anilist_search_response(request.uri().query()),
@@ -908,8 +913,6 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
 pub(crate) struct Workspace {
     /// Fero's data directory — subscriptions, blocklist, caches.
     pub(crate) store: PathBuf,
-    /// Legacy library root, still used for path-safety checks.
-    pub(crate) vault: Vault,
     /// Configured download targets per media kind, plus the shared fallback.
     pub(crate) targets: TargetSettings,
 }
@@ -953,6 +956,117 @@ impl Workspace {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetKindView {
+    id: &'static str,
+    label: &'static str,
+    folder_segment: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    directory: Option<String>,
+}
+
+/// What the settings page needs to render the target configuration.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetsResponse {
+    /// Fero's data directory, or `None` while setup is pending.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_dir: Option<String>,
+    /// Why the data directory is unusable, when it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_dir_problem: Option<String>,
+    /// Whether the data directory sits next to the application.
+    portable: bool,
+    kinds: Vec<TargetKindView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn build_targets_response() -> TargetsResponse {
+    let data = resolve_data_dir();
+    let (data_dir, data_dir_problem, portable) = match &data {
+        DataDir::Portable(path) => (Some(path.display().to_string()), None, true),
+        DataDir::Chosen(path) => (Some(path.display().to_string()), None, false),
+        DataDir::NeedsSetup { reason, .. } => (None, Some(reason.clone()), false),
+    };
+    let settings = data
+        .path()
+        .map(load_target_settings)
+        .unwrap_or_default();
+
+    TargetsResponse {
+        data_dir,
+        data_dir_problem,
+        portable,
+        kinds: MediaKind::ALL
+            .iter()
+            .map(|kind| TargetKindView {
+                id: kind.id(),
+                label: kind.label(),
+                folder_segment: kind.folder_segment(),
+                directory: settings
+                    .default_for(*kind)
+                    .map(|dir| dir.display().to_string()),
+            })
+            .collect(),
+        fallback: settings.fallback.clone(),
+        error: None,
+    }
+}
+
+#[derive(Deserialize)]
+struct SaveTargetsRequest {
+    /// Media kind id, or `null` to address the shared fallback.
+    #[serde(default)]
+    kind: Option<String>,
+    /// New directory, or `null` to clear the entry.
+    #[serde(default)]
+    directory: Option<String>,
+}
+
+fn build_save_targets_response(body: &[u8]) -> TargetsResponse {
+    let req: SaveTargetsRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => {
+            return TargetsResponse {
+                error: Some(format!("Ungültige Anfrage: {error}")),
+                ..build_targets_response()
+            }
+        }
+    };
+    let Some(store) = resolve_data_dir().path().map(Path::to_path_buf) else {
+        return TargetsResponse {
+            error: Some("Kein nutzbarer Datenordner eingerichtet.".to_string()),
+            ..build_targets_response()
+        };
+    };
+
+    let mut settings = load_target_settings(&store);
+    match req.kind.as_deref() {
+        None => settings.fallback = req.directory.clone(),
+        Some(id) => match MediaKind::from_id(id) {
+            Some(kind) => settings.set_default(kind, req.directory.as_deref().map(Path::new)),
+            None => {
+                return TargetsResponse {
+                    error: Some(format!("Unbekannter Medientyp: {id}")),
+                    ..build_targets_response()
+                }
+            }
+        },
+    }
+
+    if let Err(error) = save_target_settings(&store, &settings) {
+        return TargetsResponse {
+            error: Some(error.to_string()),
+            ..build_targets_response()
+        };
+    }
+    build_targets_response()
+}
+
 /// File holding the configured download targets, inside Fero's data directory.
 const TARGET_SETTINGS_FILE: &str = "targets.json";
 
@@ -980,22 +1094,16 @@ pub(crate) fn save_target_settings(store: &Path, settings: &TargetSettings) -> R
 pub(crate) fn resolve_workspace(
     root_override: Option<&str>,
 ) -> std::result::Result<Workspace, String> {
+    // The library root is deliberately not part of this any more: with a target
+    // per media kind (and per subscription) there is no single root to resolve.
+    // Where a work goes is decided per work, by the target chain.
+    let _ = root_override;
     let store = match resolve_data_dir() {
         DataDir::Portable(path) | DataDir::Chosen(path) => path,
         DataDir::NeedsSetup { reason, .. } => return Err(reason),
     };
-    let root = match resolve_vault_root(root_override) {
-        Ok(Some(root)) => root,
-        Ok(None) => return Err("Kein Zielordner festgelegt.".to_string()),
-        Err(error) => return Err(error.to_string()),
-    };
-    let vault = Vault::new(root).map_err(|error| error.to_string())?;
     let targets = load_target_settings(&store);
-    Ok(Workspace {
-        store,
-        vault,
-        targets,
-    })
+    Ok(Workspace { store, targets })
 }
 
 #[derive(Deserialize)]
