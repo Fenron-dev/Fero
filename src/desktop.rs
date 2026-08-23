@@ -16,6 +16,7 @@ use crate::api::novel::{
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
 use crate::core::vault::Vault;
+use crate::core::subscription::is_valid_subscription_id;
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
@@ -672,6 +673,27 @@ fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
 /// Directory inside a novel's vault folder that caches downloaded chapters.
 const WEBNOVEL_CHAPTER_CACHE_DIR: &str = ".chapters";
 
+/// Moves a chapter cache left in the work folder into Fero's data directory.
+///
+/// Best effort and silent: the cache is rebuildable by re-scraping, so a failed
+/// move must never stop a run. Only the first run after the change finds
+/// anything to do.
+fn migrate_chapter_cache(novel_dir: &Path, cache_dir: &Path) {
+    let old = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
+    if !old.is_dir() || cache_dir.exists() {
+        return;
+    }
+    if let Some(parent) = cache_dir.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::rename(&old, cache_dir).is_ok() {
+        debug_log(&format!(
+            "Kapitel-Cache aus {} in den Datenordner verschoben.",
+            old.display()
+        ));
+    }
+}
+
 /// Registry of running/finished webnovel check jobs, keyed by job id.
 static WEBNOVEL_JOBS: LazyLock<Mutex<HashMap<String, WebnovelJobStatus>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -926,6 +948,24 @@ impl Workspace {
 }
 
 impl Workspace {
+    /// Chapter cache for one subscription, inside Fero's data directory.
+    ///
+    /// Used to live in the delivered work folder. That put Fero's scratch data
+    /// into the library and made every rebuild depend on the target being
+    /// online — the cache belongs to Fero, not to the collection.
+    ///
+    /// # Errors
+    /// [`VaultError::InvalidProperty`] if the id is not a well-formed
+    /// subscription id; it becomes a directory name.
+    pub(crate) fn chapter_cache(&self, subscription_id: &str) -> Result<PathBuf> {
+        if !is_valid_subscription_id(subscription_id) {
+            return Err(VaultError::InvalidProperty(format!(
+                "invalid subscription id: {subscription_id}"
+            )));
+        }
+        Ok(self.store.join("cache").join(subscription_id))
+    }
+
     /// Delivery parent, or `None` when no usable target is configured.
     ///
     /// For read-only views: a subscription without a target is still worth
@@ -1862,7 +1902,8 @@ fn check_one_subscription(
 
     let parent = ws.delivery_parent(MediaKind::Webnovel, subscription)?;
     let novel_dir = webnovel_folder(&parent, subscription);
-    let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
+    let cache_dir = ws.chapter_cache(&subscription.id)?;
+    migrate_chapter_cache(&novel_dir, &cache_dir);
     fs::create_dir_all(&cache_dir).map_err(VaultError::from)?;
 
     // Fetch the cover once; failures are non-fatal (text matters more).
@@ -1985,7 +2026,7 @@ fn check_one_subscription(
 
     // Build EPUBs from whatever is cached — also after a partial run.
     if !downloaded_indices.is_empty() && options.build_batch && !subscription.completed {
-        build_batch_epub(&novel_dir, subscription, &downloaded_indices)?;
+        build_batch_epub(&novel_dir, &cache_dir, subscription, &downloaded_indices)?;
     }
     // The complete EPUB is also rebuilt when it is missing entirely or when a
     // cover arrived after the last build (covers embed into the EPUB itself).
@@ -1998,7 +2039,7 @@ fn check_one_subscription(
             || cover_added
             || complete_missing)
     {
-        build_complete_epub(&novel_dir, subscription)?;
+        build_complete_epub(&novel_dir, &cache_dir, subscription)?;
     } else if !complete_missing {
         // No rebuild needed, but enrichment may have added metadata — keep the
         // manifest in step with the subscription.
@@ -2234,7 +2275,12 @@ fn load_cached_chapters(cache_dir: &Path, indices: &[u32]) -> Result<Vec<EpubCha
 ///
 /// Batch files are never rewritten afterwards, so reading progress in them
 /// survives future complete-EPUB rebuilds.
-fn build_batch_epub(novel_dir: &Path, subscription: &Subscription, indices: &[u32]) -> Result<()> {
+fn build_batch_epub(
+    novel_dir: &Path,
+    cache_dir: &Path,
+    subscription: &Subscription,
+    indices: &[u32],
+) -> Result<()> {
     let min = indices.iter().min().copied().unwrap_or(0);
     let max = indices.iter().max().copied().unwrap_or(0);
     let safe_title = novel_folder_name(subscription);
@@ -2244,8 +2290,7 @@ fn build_batch_epub(novel_dir: &Path, subscription: &Subscription, indices: &[u3
         format!("{safe_title} - Kapitel {min:04}-{max:04}.epub")
     };
 
-    let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
-    let chapters = load_cached_chapters(&cache_dir, indices)?;
+    let chapters = load_cached_chapters(cache_dir, indices)?;
 
     let meta = EpubMeta {
         title: if min == max {
@@ -2265,7 +2310,7 @@ fn build_batch_epub(novel_dir: &Path, subscription: &Subscription, indices: &[u3
 }
 
 /// Rebuilds the complete EPUB from every cached chapter.
-fn build_complete_epub(novel_dir: &Path, subscription: &Subscription) -> Result<()> {
+fn build_complete_epub(novel_dir: &Path, cache_dir: &Path, subscription: &Subscription) -> Result<()> {
     let indices: Vec<u32> = subscription
         .known_chapters
         .iter()
@@ -2276,8 +2321,7 @@ fn build_complete_epub(novel_dir: &Path, subscription: &Subscription) -> Result<
         return Ok(());
     }
 
-    let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
-    let chapters = load_cached_chapters(&cache_dir, &indices)?;
+    let chapters = load_cached_chapters(cache_dir, &indices)?;
 
     let safe_title = novel_folder_name(subscription);
     let file_name = format!("{safe_title}.epub");
