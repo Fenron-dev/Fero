@@ -5,6 +5,7 @@ mod desktop_manga;
 
 pub mod api;
 pub mod core;
+pub mod deliver;
 pub mod error;
 pub mod media;
 
@@ -17,6 +18,10 @@ pub use core::vault::{RelativePath, Vault};
 pub use core::webnovel::{
     delete_subscription, list_subscriptions, load_subscription, save_subscription, BlocklistEntry,
     KnownChapter, Subscription,
+};
+pub use deliver::targets::{
+    resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution,
+    TargetSettings, TargetSource,
 };
 pub use error::{Result, VaultError};
 pub use media::{
