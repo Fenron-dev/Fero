@@ -192,8 +192,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("fero-manifest-{}-{name}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fero-manifest-{}-{name}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir should be creatable");
         dir

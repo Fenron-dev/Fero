@@ -24,7 +24,10 @@ use crate::core::webnovel::{
     KnownChapter, Subscription,
 };
 use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOutcome};
-use crate::deliver::targets::{resolve_data_dir, DataDir};
+use crate::deliver::manifest;
+use crate::deliver::targets::{
+    resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
+};
 use crate::error::{Result, VaultError};
 use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
 use serde::{Deserialize, Serialize};
@@ -1017,8 +1020,11 @@ struct WebnovelSubscriptionSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
     /// Vault-relative path of the cached cover image, when one exists.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cover_path: Option<String>,
+    /// Whether a cached cover exists in the work folder.
+    ///
+    /// Only a flag: with per-work targets there is no library-relative path to
+    /// hand the frontend, so the cover is fetched through its own endpoint.
+    has_cover: bool,
     completed: bool,
     hiatus: bool,
     enabled: bool,
@@ -1031,16 +1037,12 @@ struct WebnovelSubscriptionSummary {
 }
 
 impl WebnovelSubscriptionSummary {
-    fn from_subscription(subscription: &Subscription, vault: &Vault) -> Self {
-        // Detail views want the cover; resolve the cached file (if any) to a
-        // vault-relative path the frontend can feed into /api/media-file.
-        let cover_path =
-            load_novel_cover_path(&webnovel_folder(vault, subscription)).and_then(|absolute| {
-                vault
-                    .relative_from_absolute(&absolute)
-                    .ok()
-                    .map(|relative| relative.to_string())
-            });
+    /// Builds the summary. `work_dir` is `None` when no target is configured
+    /// yet — the subscription is still listed, just without a cover.
+    fn from_subscription(subscription: &Subscription, work_dir: Option<&Path>) -> Self {
+        let has_cover = work_dir
+            .map(|dir| load_novel_cover_path(dir).is_some())
+            .unwrap_or(false);
         Self {
             id: subscription.id.clone(),
             url: subscription.url.clone(),
@@ -1053,7 +1055,7 @@ impl WebnovelSubscriptionSummary {
             goodreads_url: subscription.goodreads_url.clone(),
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
-            cover_path,
+            has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
             enabled: subscription.enabled,
@@ -1089,7 +1091,11 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    WebnovelSubscriptionSummary::from_subscription(subscription, &ws.vault)
+                    let work_dir = ws.work_dir(MediaKind::Webnovel, subscription);
+                    WebnovelSubscriptionSummary::from_subscription(
+                        subscription,
+                        work_dir.as_deref(),
+                    )
                 })
                 .collect(),
             error: None,
@@ -1111,8 +1117,71 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
 pub(crate) struct Workspace {
     /// Fero's data directory — subscriptions, blocklist, caches.
     pub(crate) store: PathBuf,
-    /// The library finished works are delivered into.
+    /// Legacy library root, still used for path-safety checks.
     pub(crate) vault: Vault,
+    /// Configured download targets per media kind, plus the shared fallback.
+    pub(crate) targets: TargetSettings,
+}
+
+impl Workspace {
+    /// Directory the work folder for `subscription` belongs in.
+    ///
+    /// Walks the target chain: the subscription's own target, then the media
+    /// kind's default, then the confirmed fallback. Fallible on purpose — if
+    /// nothing is configured, or a configured target is offline, the work must
+    /// not silently land somewhere else.
+    ///
+    /// # Errors
+    /// [`VaultError::InvalidVaultPath`] carrying the reason to show the user.
+    pub(crate) fn delivery_parent(
+        &self,
+        kind: MediaKind,
+        subscription: &Subscription,
+    ) -> Result<PathBuf> {
+        let own = subscription.target_dir.as_deref().map(Path::new);
+        match resolve_target(own, kind, &self.targets, &self.store) {
+            TargetResolution::Resolved { parent, .. } => Ok(parent),
+            TargetResolution::NeedsChoice { reason, .. } => Err(VaultError::InvalidVaultPath(reason)),
+        }
+    }
+}
+
+impl Workspace {
+    /// Work folder for a subscription, or `None` when no target is configured.
+    ///
+    /// For read-only views: a subscription without a usable target is still
+    /// worth listing, just without the things that live in its folder.
+    pub(crate) fn work_dir(&self, kind: MediaKind, subscription: &Subscription) -> Option<PathBuf> {
+        self.delivery_parent(kind, subscription)
+            .ok()
+            .map(|parent| match kind {
+                MediaKind::Webnovel => webnovel_folder(&parent, subscription),
+                _ => parent.join(novel_folder_name(subscription)),
+            })
+    }
+}
+
+/// File holding the configured download targets, inside Fero's data directory.
+const TARGET_SETTINGS_FILE: &str = "targets.json";
+
+/// Loads the configured targets; missing or unreadable settings mean "nothing
+/// configured yet", which the target chain reports as a choice for the user.
+pub(crate) fn load_target_settings(store: &Path) -> TargetSettings {
+    fs::read_to_string(store.join(TARGET_SETTINGS_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Persists the configured targets.
+///
+/// # Errors
+/// [`VaultError::Io`] when the file cannot be written.
+pub(crate) fn save_target_settings(store: &Path, settings: &TargetSettings) -> Result<()> {
+    let body = serde_json::to_string_pretty(settings)
+        .map_err(|error| VaultError::Serialization(error.to_string()))?;
+    fs::create_dir_all(store).map_err(VaultError::from)?;
+    fs::write(store.join(TARGET_SETTINGS_FILE), body).map_err(VaultError::from)
 }
 
 /// Resolves both locations, or reports which one is missing.
@@ -1129,7 +1198,12 @@ pub(crate) fn resolve_workspace(
         Err(error) => return Err(error.to_string()),
     };
     let vault = Vault::new(root).map_err(|error| error.to_string())?;
-    Ok(Workspace { store, vault })
+    let targets = load_target_settings(&store);
+    Ok(Workspace {
+        store,
+        vault,
+        targets,
+    })
 }
 
 #[derive(Deserialize)]
@@ -1321,9 +1395,13 @@ fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
     if !req.keep_files {
         // Files move into the vault .trash folder (same convention as
         // delete-files) instead of being removed — reversible via restore.
-        let novel_dir = webnovel_folder(&ws.vault, &subscription);
+        let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
+            Ok(parent) => parent,
+            Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+        };
+        let novel_dir = webnovel_folder(&parent, &subscription);
         if novel_dir.exists() {
-            let trash_target = webnovel_trash_folder(&ws.vault, &subscription);
+            let trash_target = webnovel_trash_folder(&parent, &subscription);
             if let Some(parent) = trash_target.parent() {
                 fs::create_dir_all(parent).ok();
             }
@@ -1342,11 +1420,11 @@ fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
 }
 
 /// Vault-trash location of a novel's files.
-fn webnovel_trash_folder(vault: &Vault, subscription: &Subscription) -> PathBuf {
-    vault
-        .root()
+/// Where a deleted novel's files are parked, next to where they were
+/// delivered — with per-work targets there is no single library root any more.
+fn webnovel_trash_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
+    delivery_parent
         .join(TRASH_DIR)
-        .join(MediaType::Webnovel.folder_segment())
         .join(novel_folder_name(subscription))
 }
 
@@ -1386,7 +1464,10 @@ fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
                     id: subscription.id.clone(),
                     title: subscription.title.clone(),
                     trashed_at_unix: subscription.trashed_at_unix,
-                    files_in_trash: webnovel_trash_folder(&ws.vault, subscription).exists(),
+                    files_in_trash: ws
+                        .delivery_parent(MediaKind::Webnovel, subscription)
+                        .map(|parent| webnovel_trash_folder(&parent, subscription).exists())
+                        .unwrap_or(false),
                 })
                 .collect(),
             error: None,
@@ -1419,9 +1500,13 @@ fn build_webnovel_restore_response(body: &[u8]) -> WebnovelSimpleResponse {
         Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
     };
     // Bring trashed files back, if any.
-    let trash_source = webnovel_trash_folder(&ws.vault, &subscription);
+    let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
+        Ok(parent) => parent,
+        Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+    };
+    let trash_source = webnovel_trash_folder(&parent, &subscription);
     if trash_source.exists() {
-        let target = webnovel_folder(&ws.vault, &subscription);
+        let target = webnovel_folder(&parent, &subscription);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).ok();
         }
@@ -1453,7 +1538,12 @@ fn build_webnovel_purge_response(body: &[u8]) -> WebnovelSimpleResponse {
         return WebnovelSimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let folder = webnovel_trash_folder(&ws.vault, &subscription);
+        let Ok(parent) = ws.delivery_parent(MediaKind::Webnovel, &subscription) else {
+            return WebnovelSimpleResponse::error(
+                "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
+            );
+        };
+        let folder = webnovel_trash_folder(&parent, &subscription);
         if folder.exists() {
             fs::remove_dir_all(&folder).ok();
         }
@@ -1858,7 +1948,8 @@ fn check_one_subscription(
         }
     }
 
-    let novel_dir = webnovel_folder(&ws.vault, subscription);
+    let parent = ws.delivery_parent(MediaKind::Webnovel, subscription)?;
+    let novel_dir = webnovel_folder(&parent, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     fs::create_dir_all(&cache_dir).map_err(VaultError::from)?;
 
@@ -1982,7 +2073,7 @@ fn check_one_subscription(
 
     // Build EPUBs from whatever is cached — also after a partial run.
     if !downloaded_indices.is_empty() && options.build_batch && !subscription.completed {
-        build_batch_epub(&ws.vault, subscription, &downloaded_indices)?;
+        build_batch_epub(&novel_dir, subscription, &downloaded_indices)?;
     }
     // The complete EPUB is also rebuilt when it is missing entirely or when a
     // cover arrived after the last build (covers embed into the EPUB itself).
@@ -1995,17 +2086,11 @@ fn check_one_subscription(
             || cover_added
             || complete_missing)
     {
-        build_complete_epub(&ws.vault, subscription)?;
+        build_complete_epub(&novel_dir, subscription)?;
     } else if !complete_missing {
-        // No rebuild needed, but Goodreads/AniList enrichment may have added
-        // metadata — keep the sidecar (and thus the collections view) in sync.
-        write_webnovel_sidecar(
-            &ws.vault,
-            subscription,
-            &complete_file,
-            &subscription.id,
-            None,
-        )?;
+        // No rebuild needed, but enrichment may have added metadata — keep the
+        // manifest in step with the subscription.
+        record_delivery(&novel_dir, subscription, &complete_file, None)?;
     }
 
     if skipped_chapters > 0 {
@@ -2197,11 +2282,13 @@ fn unique_novel_folder_name(ws: &Workspace, subscription: &Subscription) -> Stri
 }
 
 /// Vault location of a novel's files (EPUBs, cover, chapter cache).
-fn webnovel_folder(vault: &Vault, subscription: &Subscription) -> PathBuf {
-    vault
-        .root()
-        .join(MediaType::Webnovel.folder_segment())
-        .join(novel_folder_name(subscription))
+/// Directory holding one novel's files.
+///
+/// The parent comes from the target chain and is resolved by the caller, so
+/// this stays a pure join and the fallible decision happens once per operation
+/// instead of once per path.
+fn webnovel_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
+    delivery_parent.join(novel_folder_name(subscription))
 }
 
 /// Cache file name for a chapter index.
@@ -2235,7 +2322,7 @@ fn load_cached_chapters(cache_dir: &Path, indices: &[u32]) -> Result<Vec<EpubCha
 ///
 /// Batch files are never rewritten afterwards, so reading progress in them
 /// survives future complete-EPUB rebuilds.
-fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32]) -> Result<()> {
+fn build_batch_epub(novel_dir: &Path, subscription: &Subscription, indices: &[u32]) -> Result<()> {
     let min = indices.iter().min().copied().unwrap_or(0);
     let max = indices.iter().max().copied().unwrap_or(0);
     let safe_title = novel_folder_name(subscription);
@@ -2245,7 +2332,6 @@ fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32])
         format!("{safe_title} - Kapitel {min:04}-{max:04}.epub")
     };
 
-    let novel_dir = webnovel_folder(vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     let chapters = load_cached_chapters(&cache_dir, indices)?;
 
@@ -2263,12 +2349,11 @@ fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32])
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
-    let entry_id = format!("{}-batch-{min:04}-{max:04}", subscription.id);
-    write_webnovel_sidecar(vault, subscription, &file_name, &entry_id, Some((min, max)))
+    record_delivery(novel_dir, subscription, &file_name, Some((min, max)))
 }
 
 /// Rebuilds the complete EPUB from every cached chapter.
-fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()> {
+fn build_complete_epub(novel_dir: &Path, subscription: &Subscription) -> Result<()> {
     let indices: Vec<u32> = subscription
         .known_chapters
         .iter()
@@ -2279,7 +2364,6 @@ fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()>
         return Ok(());
     }
 
-    let novel_dir = webnovel_folder(vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     let chapters = load_cached_chapters(&cache_dir, &indices)?;
 
@@ -2295,95 +2379,48 @@ fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()>
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
-    write_webnovel_sidecar(vault, subscription, &file_name, &subscription.id, None)
+    record_delivery(novel_dir, subscription, &file_name, None)
 }
 
-/// Writes the `.fero.yaml` sidecar next to a generated EPUB.
-/// Unions the tags already present in a novel's sidecar with the incoming
-/// ones (subscription-derived), preserving user-added tags across re-checks.
-/// Case-insensitive de-duplication; incoming tags win the casing.
-fn merge_webnovel_tags(vault: &Vault, relative: &RelativePath, incoming: &[String]) -> Vec<String> {
-    let mut result: Vec<String> = incoming.to_vec();
-    let mut seen: HashSet<String> = result.iter().map(|tag| tag.to_lowercase()).collect();
 
-    if let Ok(Some(sidecar_path)) = find_sidecar_file(vault, relative) {
-        if let Ok(raw) = fs::read_to_string(&sidecar_path) {
-            if let Ok(existing) = parse_sidecar_metadata(&raw) {
-                for tag in existing.tags {
-                    if seen.insert(tag.to_lowercase()) {
-                        result.push(tag);
-                    }
-                }
-            }
-        }
-    }
-    result
-}
-
-fn write_webnovel_sidecar(
-    vault: &Vault,
+/// Records a delivered file in the work folder's `fero.info.json`.
+///
+/// Replaces the former `.fero.yaml` sidecar. Descriptive metadata is not
+/// duplicated here — it goes into the EPUB's OPF, where any reader can see it.
+fn record_delivery(
+    work_dir: &Path,
     subscription: &Subscription,
     file_name: &str,
-    entry_id: &str,
     chapter_range: Option<(u32, u32)>,
 ) -> Result<()> {
-    let safe_title = novel_folder_name(subscription);
-    let relative = RelativePath::new(
-        PathBuf::from(MediaType::Webnovel.folder_segment())
-            .join(&safe_title)
-            .join(file_name),
-    )?;
-
-    let mut entry = MediaEntry::new(entry_id, MediaType::Webnovel, relative.clone(), file_name);
-    entry.source = PropertySource::Api;
-    entry.created_at_unix = unix_now();
-    entry.updated_at_unix = entry.created_at_unix;
-    entry.properties.title = Some(subscription.title.clone());
-    entry.properties.author = subscription.author.clone();
-    entry.properties.description = subscription.description.clone();
-    entry.properties.series_title = Some(subscription.title.clone());
-    entry.properties.genres = subscription.genres.clone();
-    // Preserve tags a user added by hand in the inspector: union the existing
-    // sidecar tags with the subscription's, so a re-check never wipes them.
-    entry.properties.tags = merge_webnovel_tags(vault, &relative, &subscription.tags);
-    entry.properties.anilist_id = subscription.anilist_id;
-    entry.properties.anilist_url = subscription.anilist_url.clone();
-    entry.properties.rating_external = subscription.rating_external;
-    // Keep the subscription and Goodreads URLs discoverable from the sidecar.
-    entry.properties.notes = Some(match subscription.goodreads_url.as_deref() {
-        Some(goodreads) => format!("Quelle: {} · Goodreads: {goodreads}", subscription.url),
-        None => format!("Quelle: {}", subscription.url),
-    });
-    entry.properties.status = Some(if subscription.completed {
-        MediaStatus::Completed
+    let mut record = manifest::load_or_new(
+        work_dir,
+        &subscription.id,
+        MediaKind::Webnovel,
+        &subscription.url,
+        &subscription.title,
+    );
+    record.title = subscription.title.clone();
+    record.status = if subscription.completed {
+        manifest::SeriesStatus::Completed
     } else if subscription.hiatus {
-        // OnHold doubles as "hiatus": abandoned upstream, never finished.
-        MediaStatus::OnHold
+        manifest::SeriesStatus::Hiatus
     } else {
-        MediaStatus::InLibrary
-    });
-    if let Some((start, end)) = chapter_range {
-        entry.properties.episode_start = Some(start.min(u32::from(u16::MAX)) as u16);
-        entry.properties.episode_end = Some(end.min(u32::from(u16::MAX)) as u16);
-    }
-
-    // Point the sidecar at the cached cover so library views can show it.
-    let novel_dir = webnovel_folder(vault, subscription);
-    if let Some(cover_path) = load_novel_cover_path(&novel_dir) {
-        if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
-            entry.properties.cover_path = RelativePath::new(
-                PathBuf::from(MediaType::Webnovel.folder_segment())
-                    .join(&safe_title)
-                    .join(cover_name),
-            )
-            .ok();
-        }
-    }
-
-    let yaml = render_sidecar_yaml(&entry)?;
-    // Shared writer: creates the parent directory and clears sidecars left
-    // behind by older naming schemes.
-    write_sidecar_preview(vault, &relative, &yaml)
+        manifest::SeriesStatus::Ongoing
+    };
+    record.last_check_unix = Some(unix_now());
+    record.record_file(file_name, chapter_range, unix_now());
+    record.chapters = subscription
+        .known_chapters
+        .iter()
+        .filter(|chapter| chapter.downloaded_at_unix.is_some())
+        .map(|chapter| manifest::ChapterRecord {
+            index: chapter.index,
+            title: chapter.title.clone(),
+            downloaded_at_unix: chapter.downloaded_at_unix.unwrap_or_default(),
+        })
+        .collect();
+    manifest::save(work_dir, &record)
 }
 
 /// Opens an external web link in the system browser.
@@ -3617,13 +3654,12 @@ mod tests {
     /// directory — otherwise deleting one novel could delete the library.
     #[test]
     fn novel_folder_never_escapes_media_directory() {
-        let vault = Vault::new("/vault").expect("vault root should be valid");
-        let base = vault.root().join(MediaType::Webnovel.folder_segment());
+        let base = PathBuf::from("/ziel/Webnovels");
 
         for title in ["..", ".", "", "///", "../../etc", ".hidden"] {
             let subscription = subscription_with_title(title);
 
-            let folder = webnovel_folder(&vault, &subscription);
+            let folder = webnovel_folder(&base, &subscription);
             assert_eq!(
                 folder.parent(),
                 Some(base.as_path()),
@@ -3631,11 +3667,8 @@ mod tests {
             );
             assert_ne!(folder, base, "title {title:?} resolved to the parent");
 
-            let trash = webnovel_trash_folder(&vault, &subscription);
-            let trash_base = vault
-                .root()
-                .join(TRASH_DIR)
-                .join(MediaType::Webnovel.folder_segment());
+            let trash = webnovel_trash_folder(&base, &subscription);
+            let trash_base = base.join(TRASH_DIR);
             assert_eq!(trash.parent(), Some(trash_base.as_path()));
             assert_ne!(trash, trash_base);
         }
