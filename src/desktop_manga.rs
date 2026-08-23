@@ -825,7 +825,7 @@ pub(crate) fn build_job_response(query: Option<&str>) -> MangaJobResponse {
 /// and the run continues; only store failures abort the whole job.
 fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<String> {
     let system_dir = &ws.store;
-    let all = list_subscriptions(&system_dir)?;
+    let all = list_subscriptions(system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
             .into_iter()
@@ -871,7 +871,7 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
             }
         }
         subscription.last_check_unix = Some(unix_now());
-        save_subscription(&system_dir, &subscription)?;
+        save_subscription(system_dir, &subscription)?;
     }
 
     let mut message = format!("{new_chapters} neue Kapitel geladen.");

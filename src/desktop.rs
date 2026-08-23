@@ -1690,7 +1690,7 @@ fn run_webnovel_check(
     job_id: &str,
 ) -> Result<String> {
     let system_dir = &ws.store;
-    let all = list_subscriptions(&system_dir)?;
+    let all = list_subscriptions(system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
             .into_iter()
@@ -1727,7 +1727,7 @@ fn run_webnovel_check(
         if !options.manual && is_webview_routed(&subscription.url) {
             subscription.last_error =
                 Some("Nur manuell prüfbar (Sicherheitsprüfung / JavaScript-Seite).".to_string());
-            save_subscription(&system_dir, &subscription)?;
+            save_subscription(system_dir, &subscription)?;
             continue;
         }
         if is_webview_routed(&subscription.url) {
@@ -1752,7 +1752,7 @@ fn run_webnovel_check(
             }
         }
         subscription.last_check_unix = Some(unix_now());
-        save_subscription(&system_dir, &subscription)?;
+        save_subscription(system_dir, &subscription)?;
     }
 
     // Close the browser window once the run that opened it is done.
