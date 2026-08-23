@@ -655,6 +655,13 @@ struct UpdateRequest {
     id: String,
     #[serde(default)]
     root: Option<String>,
+    /// New delivery target for this one subscription; clearing needs its own
+    /// flag, because a missing field and an explicit null are indistinguishable
+    /// and an unrelated update must never wipe the target.
+    #[serde(default)]
+    target_dir: Option<String>,
+    #[serde(default)]
+    clear_target_dir: bool,
     #[serde(default)]
     completed: Option<bool>,
     #[serde(default)]
