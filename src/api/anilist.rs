@@ -393,7 +393,6 @@ impl AniListClient {
         self
     }
 
-
     /// Builds a JSON request body for an AniList anime search.
     pub fn build_search_query(search: &str, adult: bool) -> String {
         serde_json::json!({
@@ -674,7 +673,6 @@ impl AniListAnimeMetadata {
             .or(self.title_romaji.as_deref())
             .or(self.title_native.as_deref())
     }
-
 }
 
 /// Date value returned by AniList.
@@ -1351,7 +1349,6 @@ struct AniListNovelCover {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn builds_query_text() {

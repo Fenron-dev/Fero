@@ -655,7 +655,11 @@ fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
 
     // `open -R` reveals the target in Finder instead of launching it. Fero
     // shows where files are; opening them is the library's job.
-    match std::process::Command::new("open").arg("-R").arg(&folder).spawn() {
+    match std::process::Command::new("open")
+        .arg("-R")
+        .arg(&folder)
+        .spawn()
+    {
         Ok(_) => OpenExternalResponse::ok(),
         Err(error) => OpenExternalResponse::error(format!("open failed: {error}")),
     }
