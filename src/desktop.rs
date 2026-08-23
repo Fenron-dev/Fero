@@ -867,7 +867,7 @@ fn build_open_external_response(query: Option<&str>) -> OpenExternalResponse {
         Err(e) => return OpenExternalResponse::error(e.to_string()),
     };
 
-    let absolute = match ws.vault.resolve_existing(relative.as_path()) {
+    let absolute = match vault.resolve_existing(relative.as_path()) {
         Ok(p) => p,
         Err(e) => return OpenExternalResponse::error(e.to_string()),
     };
@@ -1031,7 +1031,7 @@ impl WebnovelSubscriptionSummary {
         // Detail views want the cover; resolve the cached file (if any) to a
         // vault-relative path the frontend can feed into /api/media-file.
         let cover_path =
-            load_novel_cover_path(&webnovel_folder(&ws.vault, subscription)).and_then(|absolute| {
+            load_novel_cover_path(&webnovel_folder(vault, subscription)).and_then(|absolute| {
                 vault
                     .relative_from_absolute(&absolute)
                     .ok()
@@ -1226,7 +1226,7 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
     // Pin the folder now: the title may change upstream later, and two novels
     // can sanitize to the same segment — both would otherwise end up sharing
     // one directory (and one chapter cache).
-    subscription.folder_name = Some(unique_novel_folder_name(&ws.vault, &subscription));
+    subscription.folder_name = Some(unique_novel_folder_name(&ws, &subscription));
     subscription.author = info.author.clone();
     subscription.cover_url = info.cover_url.clone();
     subscription.description = info.description.clone();
@@ -1689,7 +1689,7 @@ fn run_webnovel_check(
     options: &WebnovelCheckOptions,
     job_id: &str,
 ) -> Result<String> {
-    let system_dir = ws.store;
+    let system_dir = &ws.store;
     let all = list_subscriptions(&system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
@@ -2416,7 +2416,7 @@ struct WebnovelBlocklistResponse {
 
 fn build_webnovel_blocklist_response(query: Option<&str>) -> WebnovelBlocklistResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
-    match resolve_webnovel_vault(root_override.as_deref()) {
+    match resolve_workspace(root_override.as_deref()) {
         Ok(ws) => WebnovelBlocklistResponse {
             entries: load_blocklist_entries(&ws.store),
             error: None,
@@ -3574,12 +3574,12 @@ mod tests {
     #[test]
     fn novel_folder_never_escapes_media_directory() {
         let vault = Vault::new("/vault").expect("vault root should be valid");
-        let base = ws.vault.root().join(MediaType::Webnovel.folder_segment());
+        let base = vault.root().join(MediaType::Webnovel.folder_segment());
 
         for title in ["..", ".", "", "///", "../../etc", ".hidden"] {
             let subscription = subscription_with_title(title);
 
-            let folder = webnovel_folder(&ws.vault, &subscription);
+            let folder = webnovel_folder(&vault, &subscription);
             assert_eq!(
                 folder.parent(),
                 Some(base.as_path()),
@@ -3587,7 +3587,7 @@ mod tests {
             );
             assert_ne!(folder, base, "title {title:?} resolved to the parent");
 
-            let trash = webnovel_trash_folder(&ws.vault, &subscription);
+            let trash = webnovel_trash_folder(&vault, &subscription);
             let trash_base = vault
                 .root()
                 .join(TRASH_DIR)

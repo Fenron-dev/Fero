@@ -222,7 +222,7 @@ pub(crate) struct MangaSubscriptionSummary {
 impl MangaSubscriptionSummary {
     fn from_subscription(subscription: &Subscription, vault: &Vault) -> Self {
         let cover_path =
-            manga_cover_path(&manga_folder(&ws.vault, subscription)).and_then(|absolute| {
+            manga_cover_path(&manga_folder(vault, subscription)).and_then(|absolute| {
                 vault
                     .relative_from_absolute(&absolute)
                     .ok()
@@ -389,7 +389,7 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
     let mut subscription = Subscription::new(url, source.id(), info.title.clone());
     // Pin the folder now: the title may change upstream later, and two series
     // can sanitize to the same segment.
-    subscription.folder_name = Some(unique_manga_folder_name(&ws.vault, &subscription));
+    subscription.folder_name = Some(unique_manga_folder_name(&ws, &subscription));
     apply_series_info(&mut subscription, &info);
     subscription.known_chapters = info
         .chapters
@@ -824,7 +824,7 @@ pub(crate) fn build_job_response(query: Option<&str>) -> MangaJobResponse {
 /// Per-subscription failures are recorded in that subscription's `last_error`
 /// and the run continues; only store failures abort the whole job.
 fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<String> {
-    let system_dir = ws.store;
+    let system_dir = &ws.store;
     let all = list_subscriptions(&system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
@@ -1378,8 +1378,8 @@ mod tests {
         let vault = Vault::new(vault_root.clone()).expect("vault should construct");
         let record = subscription("Serie");
 
-        let series = manga_folder(&ws.vault, &record);
-        let trashed = manga_trash_folder(&ws.vault, &record);
+        let series = manga_folder(&vault, &record);
+        let trashed = manga_trash_folder(&vault, &record);
         assert!(series.ends_with("Manga/Serie"));
         assert!(trashed.ends_with(".trash/Manga/Serie"));
     }
