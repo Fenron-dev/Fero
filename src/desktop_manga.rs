@@ -44,7 +44,6 @@ use crate::core::manga::{
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
     save_subscription, subscription_id, trash_subscription, unix_now, KnownChapter, Subscription,
 };
-use crate::core::vault::{RelativePath, Vault};
 use crate::deliver::manifest;
 use crate::deliver::targets::MediaKind;
 use crate::desktop::{
@@ -52,7 +51,6 @@ use crate::desktop::{
     Workspace,
 };
 use crate::error::{Result, VaultError};
-use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
 
 // ---------------------------------------------------------------------------
 // Job registry
@@ -207,7 +205,6 @@ pub(crate) struct MangaSubscriptionSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
     /// Vault-relative path of the cached cover image, when one exists.
-    #[serde(skip_serializing_if = "Option::is_none")]
     /// Whether a cached cover exists in the series folder.
     has_cover: bool,
     completed: bool,
@@ -1109,7 +1106,7 @@ fn download_chapter(
     };
     let page_count = images.len() as u32;
     write_cbz(&series_dir.join(&file_name), &meta, &images)?;
-    record_delivery(series_dir, subscription, &file_name, index)?;
+    record_delivery(&series_dir, subscription, &file_name, index)?;
     Ok(page_count)
 }
 
@@ -1370,14 +1367,13 @@ mod tests {
 
     #[test]
     fn trash_folder_mirrors_the_series_folder() {
-        let vault_root = std::env::temp_dir().join("manga-layout-test");
-        let vault = Vault::new(vault_root.clone()).expect("vault should construct");
+        let parent = PathBuf::from("/ziel/Manga");
         let record = subscription("Serie");
 
-        let series = manga_folder(&vault, &record);
-        let trashed = manga_trash_folder(&vault, &record);
+        let series = manga_folder(&parent, &record);
+        let trashed = manga_trash_folder(&parent, &record);
         assert!(series.ends_with("Manga/Serie"));
-        assert!(trashed.ends_with(".trash/Manga/Serie"));
+        assert!(trashed.ends_with("Manga/.trash/Serie"));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::api::novel::{
     PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
-use crate::core::vault::{RelativePath, Vault};
+use crate::core::vault::Vault;
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
@@ -28,7 +28,6 @@ use crate::deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
 };
 use crate::error::{Result, VaultError};
-use crate::media::{MediaStatus, MediaType};
 use serde::{Deserialize, Serialize};
 use tauri::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
 use tauri::Manager;
