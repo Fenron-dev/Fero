@@ -4582,6 +4582,60 @@ fn build_open_vault_root_response(query: Option<&str>) -> OpenExternalResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Cover discovery (used by the import plan)
+// ---------------------------------------------------------------------------
+
+const COVER_FILENAMES: &[&str] = &[
+    "cover.jpg",
+    "cover.jpeg",
+    "cover.png",
+    "cover.webp",
+    "folder.jpg",
+    "folder.jpeg",
+    "folder.png",
+    "poster.jpg",
+    "poster.jpeg",
+    "poster.png",
+];
+
+/// Looks for a cover image next to a media file (and one level up),
+/// returning a `/api/media-file` URL ready to use as an `<img src>`.
+fn find_cover_url(vault: &Vault, relative_path: &str) -> Option<String> {
+    use std::path::Path;
+
+    let file_path = Path::new(relative_path);
+    let dir = file_path.parent()?;
+    let vault_root = vault.root().to_string_lossy();
+    let vault_root_enc = urlencoding::encode(&vault_root);
+
+    let parent_dir = dir.parent();
+    let mut dirs_to_check: Vec<&Path> = vec![dir];
+    if let Some(p) = parent_dir {
+        // Only check parent if it is not the vault root itself (empty string = root)
+        if p != Path::new("") {
+            dirs_to_check.push(p);
+        }
+    }
+
+    for check_dir in dirs_to_check {
+        for name in COVER_FILENAMES {
+            let candidate_rel = check_dir.join(name);
+            let candidate_abs = vault.root().join(&candidate_rel);
+            if candidate_abs.exists() {
+                let rel_str = candidate_rel.to_string_lossy().replace('\\', "/");
+                return Some(format!(
+                    "/api/media-file?path={}&root={}",
+                    urlencoding::encode(&rel_str),
+                    vault_root_enc,
+                ));
+            }
+        }
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Subtitle discovery
 // ---------------------------------------------------------------------------
 
