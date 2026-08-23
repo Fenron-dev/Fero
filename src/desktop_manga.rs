@@ -1067,7 +1067,7 @@ fn download_chapter(
         });
     }
 
-    let series_dir = manga_folder(&ws.vault, subscription);
+    let series_dir = manga_folder(vault, subscription);
     let file_name = chapter_file_name(subscription, chapter, index);
     let meta = CbzMeta {
         series: subscription.title.clone(),
@@ -1084,7 +1084,7 @@ fn download_chapter(
     };
     let page_count = images.len() as u32;
     write_cbz(&series_dir.join(&file_name), &meta, &images)?;
-    write_manga_sidecar(&ws.vault, subscription, &file_name, chapter, index)?;
+    write_manga_sidecar(vault, subscription, &file_name, chapter, index)?;
     Ok(page_count)
 }
 
@@ -1295,7 +1295,7 @@ fn write_manga_sidecar(
     entry.properties.episode_start = Some(clamped);
     entry.properties.episode_end = Some(clamped);
 
-    if let Some(cover_path) = manga_cover_path(&manga_folder(&ws.vault, subscription)) {
+    if let Some(cover_path) = manga_cover_path(&manga_folder(vault, subscription)) {
         if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
             entry.properties.cover_path = RelativePath::new(
                 PathBuf::from(MediaType::Manga.folder_segment())
@@ -1307,7 +1307,7 @@ fn write_manga_sidecar(
     }
 
     let yaml = render_sidecar_yaml(&entry)?;
-    write_sidecar_preview(&ws.vault, &relative, &yaml)
+    write_sidecar_preview(vault, &relative, &yaml)
 }
 
 // ---------------------------------------------------------------------------

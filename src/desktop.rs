@@ -2235,7 +2235,7 @@ fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32])
         format!("{safe_title} - Kapitel {min:04}-{max:04}.epub")
     };
 
-    let novel_dir = webnovel_folder(&ws.vault, subscription);
+    let novel_dir = webnovel_folder(vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     let chapters = load_cached_chapters(&cache_dir, indices)?;
 
@@ -2254,7 +2254,7 @@ fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32])
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
     let entry_id = format!("{}-batch-{min:04}-{max:04}", subscription.id);
-    write_webnovel_sidecar(&ws.vault, subscription, &file_name, &entry_id, Some((min, max)))
+    write_webnovel_sidecar(vault, subscription, &file_name, &entry_id, Some((min, max)))
 }
 
 /// Rebuilds the complete EPUB from every cached chapter.
@@ -2269,7 +2269,7 @@ fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()>
         return Ok(());
     }
 
-    let novel_dir = webnovel_folder(&ws.vault, subscription);
+    let novel_dir = webnovel_folder(vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     let chapters = load_cached_chapters(&cache_dir, &indices)?;
 
@@ -2285,7 +2285,7 @@ fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()>
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
-    write_webnovel_sidecar(&ws.vault, subscription, &file_name, &subscription.id, None)
+    write_webnovel_sidecar(vault, subscription, &file_name, &subscription.id, None)
 }
 
 /// Writes the `.fero.yaml` sidecar next to a generated EPUB.
@@ -2296,7 +2296,7 @@ fn merge_webnovel_tags(vault: &Vault, relative: &RelativePath, incoming: &[Strin
     let mut result: Vec<String> = incoming.to_vec();
     let mut seen: HashSet<String> = result.iter().map(|tag| tag.to_lowercase()).collect();
 
-    if let Ok(Some(sidecar_path)) = find_sidecar_file(&ws.vault, relative) {
+    if let Ok(Some(sidecar_path)) = find_sidecar_file(vault, relative) {
         if let Ok(raw) = fs::read_to_string(&sidecar_path) {
             if let Ok(existing) = parse_sidecar_metadata(&raw) {
                 for tag in existing.tags {
@@ -2335,7 +2335,7 @@ fn write_webnovel_sidecar(
     entry.properties.genres = subscription.genres.clone();
     // Preserve tags a user added by hand in the inspector: union the existing
     // sidecar tags with the subscription's, so a re-check never wipes them.
-    entry.properties.tags = merge_webnovel_tags(&ws.vault, &relative, &subscription.tags);
+    entry.properties.tags = merge_webnovel_tags(vault, &relative, &subscription.tags);
     entry.properties.anilist_id = subscription.anilist_id;
     entry.properties.anilist_url = subscription.anilist_url.clone();
     entry.properties.rating_external = subscription.rating_external;
@@ -2358,7 +2358,7 @@ fn write_webnovel_sidecar(
     }
 
     // Point the sidecar at the cached cover so library views can show it.
-    let novel_dir = webnovel_folder(&ws.vault, subscription);
+    let novel_dir = webnovel_folder(vault, subscription);
     if let Some(cover_path) = load_novel_cover_path(&novel_dir) {
         if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
             entry.properties.cover_path = RelativePath::new(
@@ -2373,7 +2373,7 @@ fn write_webnovel_sidecar(
     let yaml = render_sidecar_yaml(&entry)?;
     // Shared writer: creates the parent directory and clears sidecars left
     // behind by older naming schemes.
-    write_sidecar_preview(&ws.vault, &relative, &yaml)
+    write_sidecar_preview(vault, &relative, &yaml)
 }
 
 /// Opens an external web link in the system browser.
