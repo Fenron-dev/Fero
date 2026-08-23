@@ -11,6 +11,7 @@ mod routes;
 
 pub(crate) use http::{extract_query_value, impl_outcome, json_response, Outcome};
 pub(crate) use log::debug_log;
+use log::debug_log_path;
 use browser::*;
 use log::{build_open_debug_log_response, build_webnovel_debug_log_response};
 use routes::handle_request;
@@ -49,6 +50,9 @@ use tauri::Manager;
 
 const PROTOCOL_SCHEME: &str = "fero";
 
+// Die beiden Fenster-Antworten deklarieren ihr Outcome in browser.rs: das Makro
+// greift auf das private error-Feld zu und muss deshalb dort stehen, wo die
+// Struktur definiert ist.
 impl_outcome!(
     AniListSearchResponse,
     SelectFolderResponse,
@@ -61,8 +65,6 @@ impl_outcome!(
     WebnovelCheckResponse,
     WebnovelJobResponse,
     WebnovelBlocklistResponse,
-    WebnovelSolveResponse,
-    WebnovelLoginResponse,
 );
 const LEGACY_SYSTEM_DIR: &str = ".mediashelf";
 /// In-vault trash folder; deleted files move here (reversible) preserving

@@ -50,6 +50,8 @@ struct WebnovelSolveRequest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+impl_outcome!(WebnovelSolveResponse, WebnovelLoginResponse);
+
 pub(super) struct WebnovelSolveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     host: Option<String>,
@@ -352,9 +354,6 @@ fn persist_session(host: &str, session: &BrowserSession) {
 }
 
 /// Loads persisted sessions into the RAM store (called once at startup).
-/// Moves subscriptions out of the library into Fero's data directory.
-///
-
 pub(super) fn restore_webnovel_sessions() {
     // Tighten permissions on stores written by older versions, which created
     // the file with the default (world-readable) mode.
@@ -588,9 +587,6 @@ pub(super) fn build_webnovel_logout_response(body: &[u8]) -> WebnovelSimpleRespo
 // the rendered `outerHTML` into a JS variable; Rust pulls it in chunks by
 // eval-ing "set title to chunk i" and reading the title. The window has no
 // IPC / app access whatsoever.
-
-/// Appends a timestamped line to the webnovel debug log (best effort).
-///
 
 /// Label of the persistent fetch/browser window.
 const BROWSER_WINDOW_LABEL: &str = "mv-browser";
