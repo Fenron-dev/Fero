@@ -23,6 +23,7 @@ use crate::core::webnovel::{
     save_subscription, save_user_blocklist, trash_subscription, unix_now, BlocklistEntry,
     KnownChapter, Subscription,
 };
+use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOutcome};
 use crate::deliver::targets::{resolve_data_dir, DataDir};
 use crate::error::{Result, VaultError};
 use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
@@ -104,8 +105,11 @@ pub(crate) fn run() -> Result<()> {
                 // threads; capture it once from the protocol context.
                 if APP_HANDLE.set(context.app_handle().clone()).is_ok() {
                     // First request wins the OnceLock — restore persisted login
-                    // sessions (NovelUpdates etc.) into the RAM store then.
+                    // sessions (NovelUpdates etc.) into the RAM store then, and
+                    // move the bookkeeping out of the library if it still sits
+                    // there from before the split.
                     restore_webnovel_sessions();
+                    migrate_store_if_needed();
                 }
                 std::thread::spawn(move || {
                     responder.respond(handle_request(&request));
@@ -2798,6 +2802,40 @@ fn persist_session(host: &str, session: &BrowserSession) {
 }
 
 /// Loads persisted sessions into the RAM store (called once at startup).
+/// Moves subscriptions out of the library into Fero's data directory.
+///
+/// Only relevant for installations from before the split; the migration itself
+/// is idempotent, so this runs unconditionally at startup and reports what it
+/// found into the debug log.
+fn migrate_store_if_needed() {
+    let Some(data_dir) = resolve_data_dir().path().map(Path::to_path_buf) else {
+        debug_log("Migration übersprungen: kein nutzbarer Datenordner.");
+        return;
+    };
+    let Ok(Some(root)) = resolve_vault_root(None) else {
+        return;
+    };
+    let Ok(vault) = Vault::new(root) else {
+        return;
+    };
+
+    match migrate_store_from_library(&data_dir, &vault.system_dir()) {
+        MigrationOutcome::NothingToDo => {}
+        MigrationOutcome::Migrated {
+            subscriptions,
+            from,
+        } => debug_log(&format!(
+            "{subscriptions} Abos aus {from} in den Datenordner kopiert. \
+             Die Originale bleiben vorerst liegen und können nach einer \
+             Kontrolle von Hand gelöscht werden."
+        )),
+        MigrationOutcome::Failed(reason) => debug_log(&format!(
+            "Migration der Abos fehlgeschlagen: {reason}. Es wird weiter der \
+             alte Ort in der Bibliothek verwendet."
+        )),
+    }
+}
+
 fn restore_webnovel_sessions() {
     // Tighten permissions on stores written by older versions, which created
     // the file with the default (world-readable) mode.
