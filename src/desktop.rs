@@ -17,6 +17,7 @@ use crate::api::novel::{
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
 use crate::core::properties::{legacy_sidecar_path_for, render_sidecar_yaml, sidecar_path_for};
 use crate::core::vault::{RelativePath, Vault};
+use crate::deliver::targets::{resolve_data_dir, DataDir};
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
@@ -866,7 +867,7 @@ fn build_open_external_response(query: Option<&str>) -> OpenExternalResponse {
         Err(e) => return OpenExternalResponse::error(e.to_string()),
     };
 
-    let absolute = match vault.resolve_existing(relative.as_path()) {
+    let absolute = match ws.vault.resolve_existing(relative.as_path()) {
         Ok(p) => p,
         Err(e) => return OpenExternalResponse::error(e.to_string()),
     };
@@ -1030,7 +1031,7 @@ impl WebnovelSubscriptionSummary {
         // Detail views want the cover; resolve the cached file (if any) to a
         // vault-relative path the frontend can feed into /api/media-file.
         let cover_path =
-            load_novel_cover_path(&webnovel_folder(vault, subscription)).and_then(|absolute| {
+            load_novel_cover_path(&webnovel_folder(&ws.vault, subscription)).and_then(|absolute| {
                 vault
                     .relative_from_absolute(&absolute)
                     .ok()
@@ -1069,8 +1070,8 @@ struct WebnovelListResponse {
 
 fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
-    let vault = match resolve_webnovel_vault(root_override.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(root_override.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => {
             return WebnovelListResponse {
                 subscriptions: Vec::new(),
@@ -1079,12 +1080,12 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
         }
     };
 
-    match list_subscriptions(&vault.system_dir()) {
+    match list_subscriptions(&ws.store) {
         Ok(subscriptions) => WebnovelListResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    WebnovelSubscriptionSummary::from_subscription(subscription, &vault)
+                    WebnovelSubscriptionSummary::from_subscription(subscription, &ws.vault)
                 })
                 .collect(),
             error: None,
@@ -1097,13 +1098,34 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
 }
 
 /// Resolves the active vault or produces a user-facing German error message.
-fn resolve_webnovel_vault(root_override: Option<&str>) -> std::result::Result<Vault, String> {
+/// Fero's own storage plus the library it delivers into.
+///
+/// The two are deliberately separate. Subscriptions, blocklists and caches are
+/// Fero's bookkeeping and live in Fero's data directory; only finished works go
+/// into the library. Writing bookkeeping into the library would put Fero's
+/// files inside someone else's collection.
+pub(crate) struct Workspace {
+    /// Fero's data directory — subscriptions, blocklist, caches.
+    pub(crate) store: PathBuf,
+    /// The library finished works are delivered into.
+    pub(crate) vault: Vault,
+}
+
+/// Resolves both locations, or reports which one is missing.
+pub(crate) fn resolve_workspace(
+    root_override: Option<&str>,
+) -> std::result::Result<Workspace, String> {
+    let store = match resolve_data_dir() {
+        DataDir::Portable(path) | DataDir::Chosen(path) => path,
+        DataDir::NeedsSetup { reason, .. } => return Err(reason),
+    };
     let root = match resolve_vault_root(root_override) {
         Ok(Some(root)) => root,
-        Ok(None) => return Err("Kein Vault geöffnet.".to_string()),
+        Ok(None) => return Err("Kein Zielordner festgelegt.".to_string()),
         Err(error) => return Err(error.to_string()),
     };
-    Vault::new(root).map_err(|error| error.to_string())
+    let vault = Vault::new(root).map_err(|error| error.to_string())?;
+    Ok(Workspace { store, vault })
 }
 
 #[derive(Deserialize)]
@@ -1139,8 +1161,8 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
         Err(error) => return WebnovelSubscribeResponse::error(format!("Invalid request: {error}")),
     };
 
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return WebnovelSubscribeResponse::error(message),
     };
 
@@ -1148,17 +1170,17 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return WebnovelSubscribeResponse::error("Bitte eine vollständige URL angeben.");
     }
-    if let Some(reason) = blocked_reason(&vault.system_dir(), &url) {
+    if let Some(reason) = blocked_reason(&ws.store, &url) {
         return WebnovelSubscribeResponse::error(reason);
     }
 
     // Re-subscribing an existing URL returns the current record unchanged.
     let id = crate::core::webnovel::subscription_id(&url);
-    match load_subscription(&vault.system_dir(), &id) {
+    match load_subscription(&ws.store, &id) {
         Ok(Some(existing)) => {
             return WebnovelSubscribeResponse {
                 subscription: Some(WebnovelSubscriptionSummary::from_subscription(
-                    &existing, &vault,
+                    &existing, &ws.vault,
                 )),
                 already_subscribed: true,
                 error: None,
@@ -1204,7 +1226,7 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
     // Pin the folder now: the title may change upstream later, and two novels
     // can sanitize to the same segment — both would otherwise end up sharing
     // one directory (and one chapter cache).
-    subscription.folder_name = Some(unique_novel_folder_name(&vault, &subscription));
+    subscription.folder_name = Some(unique_novel_folder_name(&ws.vault, &subscription));
     subscription.author = info.author.clone();
     subscription.cover_url = info.cover_url.clone();
     subscription.description = info.description.clone();
@@ -1226,11 +1248,11 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
         })
         .collect();
 
-    match save_subscription(&vault.system_dir(), &subscription) {
+    match save_subscription(&ws.store, &subscription) {
         Ok(()) => WebnovelSubscribeResponse {
             subscription: Some(WebnovelSubscriptionSummary::from_subscription(
                 &subscription,
-                &vault,
+                &ws.vault,
             )),
             already_subscribed: false,
             error: None,
@@ -1280,13 +1302,13 @@ fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
         Ok(req) => req,
         Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return WebnovelSimpleResponse::error(message),
     };
 
     // Soft delete: the record moves to the in-app trash and can be restored.
-    let subscription = match trash_subscription(&vault.system_dir(), &req.id) {
+    let subscription = match trash_subscription(&ws.store, &req.id) {
         Ok(Some(subscription)) => subscription,
         Ok(None) => return WebnovelSimpleResponse::error("Abo nicht gefunden."),
         Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
@@ -1295,9 +1317,9 @@ fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
     if !req.keep_files {
         // Files move into the vault .trash folder (same convention as
         // delete-files) instead of being removed — reversible via restore.
-        let novel_dir = webnovel_folder(&vault, &subscription);
+        let novel_dir = webnovel_folder(&ws.vault, &subscription);
         if novel_dir.exists() {
-            let trash_target = webnovel_trash_folder(&vault, &subscription);
+            let trash_target = webnovel_trash_folder(&ws.vault, &subscription);
             if let Some(parent) = trash_target.parent() {
                 fs::create_dir_all(parent).ok();
             }
@@ -1343,8 +1365,8 @@ struct WebnovelTrashResponse {
 
 fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
-    let vault = match resolve_webnovel_vault(root_override.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(root_override.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => {
             return WebnovelTrashResponse {
                 entries: Vec::new(),
@@ -1352,7 +1374,7 @@ fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
             }
         }
     };
-    match list_trashed_subscriptions(&vault.system_dir()) {
+    match list_trashed_subscriptions(&ws.store) {
         Ok(trashed) => WebnovelTrashResponse {
             entries: trashed
                 .iter()
@@ -1360,7 +1382,7 @@ fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
                     id: subscription.id.clone(),
                     title: subscription.title.clone(),
                     trashed_at_unix: subscription.trashed_at_unix,
-                    files_in_trash: webnovel_trash_folder(&vault, subscription).exists(),
+                    files_in_trash: webnovel_trash_folder(&ws.vault, subscription).exists(),
                 })
                 .collect(),
             error: None,
@@ -1384,18 +1406,18 @@ fn build_webnovel_restore_response(body: &[u8]) -> WebnovelSimpleResponse {
         Ok(req) => req,
         Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return WebnovelSimpleResponse::error(message),
     };
-    let subscription = match restore_subscription(&vault.system_dir(), &req.id) {
+    let subscription = match restore_subscription(&ws.store, &req.id) {
         Ok(subscription) => subscription,
         Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
     };
     // Bring trashed files back, if any.
-    let trash_source = webnovel_trash_folder(&vault, &subscription);
+    let trash_source = webnovel_trash_folder(&ws.vault, &subscription);
     if trash_source.exists() {
-        let target = webnovel_folder(&vault, &subscription);
+        let target = webnovel_folder(&ws.vault, &subscription);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).ok();
         }
@@ -1411,23 +1433,23 @@ fn build_webnovel_purge_response(body: &[u8]) -> WebnovelSimpleResponse {
         Ok(req) => req,
         Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return WebnovelSimpleResponse::error(message),
     };
     // Need the record before purging it to find its trashed folder.
-    let trashed = list_trashed_subscriptions(&vault.system_dir())
+    let trashed = list_trashed_subscriptions(&ws.store)
         .ok()
         .and_then(|entries| {
             entries
                 .into_iter()
                 .find(|subscription| subscription.id == req.id)
         });
-    if let Err(error) = purge_trashed_subscription(&vault.system_dir(), &req.id) {
+    if let Err(error) = purge_trashed_subscription(&ws.store, &req.id) {
         return WebnovelSimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let folder = webnovel_trash_folder(&vault, &subscription);
+        let folder = webnovel_trash_folder(&ws.vault, &subscription);
         if folder.exists() {
             fs::remove_dir_all(&folder).ok();
         }
@@ -1453,12 +1475,12 @@ fn build_webnovel_update_response(body: &[u8]) -> WebnovelSimpleResponse {
         Ok(req) => req,
         Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return WebnovelSimpleResponse::error(message),
     };
 
-    let mut subscription = match load_subscription(&vault.system_dir(), &req.id) {
+    let mut subscription = match load_subscription(&ws.store, &req.id) {
         Ok(Some(subscription)) => subscription,
         Ok(None) => return WebnovelSimpleResponse::error("Abo nicht gefunden."),
         Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
@@ -1474,7 +1496,7 @@ fn build_webnovel_update_response(body: &[u8]) -> WebnovelSimpleResponse {
         subscription.enabled = enabled;
     }
 
-    match save_subscription(&vault.system_dir(), &subscription) {
+    match save_subscription(&ws.store, &subscription) {
         Ok(()) => WebnovelSimpleResponse::ok(),
         Err(error) => WebnovelSimpleResponse::error(error.to_string()),
     }
@@ -1554,8 +1576,8 @@ fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
         }
     };
 
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => {
             return WebnovelCheckResponse {
                 job_id: None,
@@ -1596,7 +1618,7 @@ fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
     let thread_job_id = job_id.clone();
     std::thread::spawn(move || {
         let _active = WebnovelCheckActiveGuard;
-        let outcome = run_webnovel_check(&vault, &options, &thread_job_id);
+        let outcome = run_webnovel_check(&ws.vault, &options, &thread_job_id);
         update_webnovel_job(&thread_job_id, |status| match &outcome {
             Ok(message) => {
                 status.state = "done".to_string();
@@ -1663,11 +1685,11 @@ fn build_webnovel_job_response(query: Option<&str>) -> WebnovelJobResponse {
 /// and the run continues; only infrastructure failures (store unwritable)
 /// abort the whole job.
 fn run_webnovel_check(
-    vault: &Vault,
+    ws: &Workspace,
     options: &WebnovelCheckOptions,
     job_id: &str,
 ) -> Result<String> {
-    let system_dir = vault.system_dir();
+    let system_dir = ws.store;
     let all = list_subscriptions(&system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
@@ -1719,7 +1741,7 @@ fn run_webnovel_check(
             status.message = None;
         });
 
-        match check_one_subscription(vault, &client, &mut subscription, options, job_id) {
+        match check_one_subscription(ws, &client, &mut subscription, options, job_id) {
             Ok(downloaded) => {
                 new_chapters += downloaded;
                 subscription.last_error = None;
@@ -1748,13 +1770,13 @@ fn run_webnovel_check(
 
 /// Checks one subscription: refresh ToC, download pending chapters, build EPUBs.
 fn check_one_subscription(
-    vault: &Vault,
+    ws: &Workspace,
     client: &PoliteClient,
     subscription: &mut Subscription,
     options: &WebnovelCheckOptions,
     job_id: &str,
 ) -> Result<usize> {
-    if let Some(reason) = blocked_reason(&vault.system_dir(), &subscription.url) {
+    if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
         return Err(VaultError::ExternalApi(reason));
     }
     let source = detect_source(&subscription.url);
@@ -1832,7 +1854,7 @@ fn check_one_subscription(
         }
     }
 
-    let novel_dir = webnovel_folder(vault, subscription);
+    let novel_dir = webnovel_folder(&ws.vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     fs::create_dir_all(&cache_dir).map_err(VaultError::from)?;
 
@@ -1948,7 +1970,7 @@ fn check_one_subscription(
         }
 
         // Persist after every chapter so an aborted run can resume.
-        save_subscription(&vault.system_dir(), subscription)?;
+        save_subscription(&ws.store, subscription)?;
         update_webnovel_job(job_id, |status| {
             status.downloaded += 1;
         });
@@ -1956,7 +1978,7 @@ fn check_one_subscription(
 
     // Build EPUBs from whatever is cached — also after a partial run.
     if !downloaded_indices.is_empty() && options.build_batch && !subscription.completed {
-        build_batch_epub(vault, subscription, &downloaded_indices)?;
+        build_batch_epub(&ws.vault, subscription, &downloaded_indices)?;
     }
     // The complete EPUB is also rebuilt when it is missing entirely or when a
     // cover arrived after the last build (covers embed into the EPUB itself).
@@ -1969,11 +1991,11 @@ fn check_one_subscription(
             || cover_added
             || complete_missing)
     {
-        build_complete_epub(vault, subscription)?;
+        build_complete_epub(&ws.vault, subscription)?;
     } else if !complete_missing {
         // No rebuild needed, but Goodreads/AniList enrichment may have added
         // metadata — keep the sidecar (and thus the collections view) in sync.
-        write_webnovel_sidecar(vault, subscription, &complete_file, &subscription.id, None)?;
+        write_webnovel_sidecar(&ws.vault, subscription, &complete_file, &subscription.id, None)?;
     }
 
     if skipped_chapters > 0 {
@@ -2149,9 +2171,9 @@ fn novel_folder_name(subscription: &Subscription) -> String {
 /// Distinct novels can sanitize to the same segment ("Re:Zero" / "Re Zero");
 /// the loser of that race would otherwise write its EPUBs and chapter cache
 /// into the winner's directory. The subscription id disambiguates.
-fn unique_novel_folder_name(vault: &Vault, subscription: &Subscription) -> String {
+fn unique_novel_folder_name(ws: &Workspace, subscription: &Subscription) -> String {
     let base = novel_folder_name(subscription);
-    let taken = list_subscriptions(&vault.system_dir())
+    let taken = list_subscriptions(&ws.store)
         .unwrap_or_default()
         .iter()
         .filter(|other| other.id != subscription.id)
@@ -2213,7 +2235,7 @@ fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32])
         format!("{safe_title} - Kapitel {min:04}-{max:04}.epub")
     };
 
-    let novel_dir = webnovel_folder(vault, subscription);
+    let novel_dir = webnovel_folder(&ws.vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     let chapters = load_cached_chapters(&cache_dir, indices)?;
 
@@ -2232,7 +2254,7 @@ fn build_batch_epub(vault: &Vault, subscription: &Subscription, indices: &[u32])
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
     let entry_id = format!("{}-batch-{min:04}-{max:04}", subscription.id);
-    write_webnovel_sidecar(vault, subscription, &file_name, &entry_id, Some((min, max)))
+    write_webnovel_sidecar(&ws.vault, subscription, &file_name, &entry_id, Some((min, max)))
 }
 
 /// Rebuilds the complete EPUB from every cached chapter.
@@ -2247,7 +2269,7 @@ fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()>
         return Ok(());
     }
 
-    let novel_dir = webnovel_folder(vault, subscription);
+    let novel_dir = webnovel_folder(&ws.vault, subscription);
     let cache_dir = novel_dir.join(WEBNOVEL_CHAPTER_CACHE_DIR);
     let chapters = load_cached_chapters(&cache_dir, &indices)?;
 
@@ -2263,7 +2285,7 @@ fn build_complete_epub(vault: &Vault, subscription: &Subscription) -> Result<()>
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
 
-    write_webnovel_sidecar(vault, subscription, &file_name, &subscription.id, None)
+    write_webnovel_sidecar(&ws.vault, subscription, &file_name, &subscription.id, None)
 }
 
 /// Writes the `.fero.yaml` sidecar next to a generated EPUB.
@@ -2274,7 +2296,7 @@ fn merge_webnovel_tags(vault: &Vault, relative: &RelativePath, incoming: &[Strin
     let mut result: Vec<String> = incoming.to_vec();
     let mut seen: HashSet<String> = result.iter().map(|tag| tag.to_lowercase()).collect();
 
-    if let Ok(Some(sidecar_path)) = find_sidecar_file(vault, relative) {
+    if let Ok(Some(sidecar_path)) = find_sidecar_file(&ws.vault, relative) {
         if let Ok(raw) = fs::read_to_string(&sidecar_path) {
             if let Ok(existing) = parse_sidecar_metadata(&raw) {
                 for tag in existing.tags {
@@ -2313,7 +2335,7 @@ fn write_webnovel_sidecar(
     entry.properties.genres = subscription.genres.clone();
     // Preserve tags a user added by hand in the inspector: union the existing
     // sidecar tags with the subscription's, so a re-check never wipes them.
-    entry.properties.tags = merge_webnovel_tags(vault, &relative, &subscription.tags);
+    entry.properties.tags = merge_webnovel_tags(&ws.vault, &relative, &subscription.tags);
     entry.properties.anilist_id = subscription.anilist_id;
     entry.properties.anilist_url = subscription.anilist_url.clone();
     entry.properties.rating_external = subscription.rating_external;
@@ -2336,7 +2358,7 @@ fn write_webnovel_sidecar(
     }
 
     // Point the sidecar at the cached cover so library views can show it.
-    let novel_dir = webnovel_folder(vault, subscription);
+    let novel_dir = webnovel_folder(&ws.vault, subscription);
     if let Some(cover_path) = load_novel_cover_path(&novel_dir) {
         if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
             entry.properties.cover_path = RelativePath::new(
@@ -2351,7 +2373,7 @@ fn write_webnovel_sidecar(
     let yaml = render_sidecar_yaml(&entry)?;
     // Shared writer: creates the parent directory and clears sidecars left
     // behind by older naming schemes.
-    write_sidecar_preview(vault, &relative, &yaml)
+    write_sidecar_preview(&ws.vault, &relative, &yaml)
 }
 
 /// Opens an external web link in the system browser.
@@ -2395,8 +2417,8 @@ struct WebnovelBlocklistResponse {
 fn build_webnovel_blocklist_response(query: Option<&str>) -> WebnovelBlocklistResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
     match resolve_webnovel_vault(root_override.as_deref()) {
-        Ok(vault) => WebnovelBlocklistResponse {
-            entries: load_blocklist_entries(&vault.system_dir()),
+        Ok(ws) => WebnovelBlocklistResponse {
+            entries: load_blocklist_entries(&ws.store),
             error: None,
         },
         Err(message) => WebnovelBlocklistResponse {
@@ -2418,11 +2440,11 @@ fn build_webnovel_blocklist_save_response(body: &[u8]) -> WebnovelSimpleResponse
         Ok(req) => req,
         Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_webnovel_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return WebnovelSimpleResponse::error(message),
     };
-    match save_user_blocklist(&vault.system_dir(), &req.entries) {
+    match save_user_blocklist(&ws.store, &req.entries) {
         Ok(()) => WebnovelSimpleResponse::ok(),
         Err(error) => WebnovelSimpleResponse::error(error.to_string()),
     }
@@ -3552,12 +3574,12 @@ mod tests {
     #[test]
     fn novel_folder_never_escapes_media_directory() {
         let vault = Vault::new("/vault").expect("vault root should be valid");
-        let base = vault.root().join(MediaType::Webnovel.folder_segment());
+        let base = ws.vault.root().join(MediaType::Webnovel.folder_segment());
 
         for title in ["..", ".", "", "///", "../../etc", ".hidden"] {
             let subscription = subscription_with_title(title);
 
-            let folder = webnovel_folder(&vault, &subscription);
+            let folder = webnovel_folder(&ws.vault, &subscription);
             assert_eq!(
                 folder.parent(),
                 Some(base.as_path()),
@@ -3565,7 +3587,7 @@ mod tests {
             );
             assert_ne!(folder, base, "title {title:?} resolved to the parent");
 
-            let trash = webnovel_trash_folder(&vault, &subscription);
+            let trash = webnovel_trash_folder(&ws.vault, &subscription);
             let trash_base = vault
                 .root()
                 .join(TRASH_DIR)

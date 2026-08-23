@@ -47,8 +47,8 @@ use crate::core::manga::{
 use crate::core::properties::render_sidecar_yaml;
 use crate::core::vault::{RelativePath, Vault};
 use crate::desktop::{
-    debug_log, extract_query_value, resolve_vault_root, safe_folder_segment, sanitize_path_segment,
-    write_sidecar_preview,
+    debug_log, extract_query_value, resolve_workspace, safe_folder_segment, sanitize_path_segment,
+    write_sidecar_preview, Workspace,
 };
 use crate::error::{Result, VaultError};
 use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
@@ -222,7 +222,7 @@ pub(crate) struct MangaSubscriptionSummary {
 impl MangaSubscriptionSummary {
     fn from_subscription(subscription: &Subscription, vault: &Vault) -> Self {
         let cover_path =
-            manga_cover_path(&manga_folder(vault, subscription)).and_then(|absolute| {
+            manga_cover_path(&manga_folder(&ws.vault, subscription)).and_then(|absolute| {
                 vault
                     .relative_from_absolute(&absolute)
                     .ok()
@@ -253,15 +253,6 @@ impl MangaSubscriptionSummary {
 }
 
 /// Resolves the active vault or produces a user-facing German error message.
-fn resolve_manga_vault(root_override: Option<&str>) -> std::result::Result<Vault, String> {
-    let root = match resolve_vault_root(root_override) {
-        Ok(Some(root)) => root,
-        Ok(None) => return Err("Kein Vault geöffnet.".to_string()),
-        Err(error) => return Err(error.to_string()),
-    };
-    Vault::new(root).map_err(|error| error.to_string())
-}
-
 // ---------------------------------------------------------------------------
 // GET /api/manga/list
 // ---------------------------------------------------------------------------
@@ -273,11 +264,11 @@ pub(crate) struct MangaListResponse {
     error: Option<String>,
 }
 
-/// Lists all manga subscriptions of the active vault.
+/// Lists all manga subscriptions of the active ws.vault.
 pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
-    let vault = match resolve_manga_vault(root_override.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(root_override.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => {
             return MangaListResponse {
                 subscriptions: Vec::new(),
@@ -286,12 +277,12 @@ pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
         }
     };
 
-    match list_subscriptions(&vault.system_dir()) {
+    match list_subscriptions(&ws.store) {
         Ok(subscriptions) => MangaListResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    MangaSubscriptionSummary::from_subscription(subscription, &vault)
+                    MangaSubscriptionSummary::from_subscription(subscription, &ws.vault)
                 })
                 .collect(),
             error: None,
@@ -342,8 +333,8 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         Err(error) => return MangaSubscribeResponse::error(format!("Invalid request: {error}")),
     };
 
-    let vault = match resolve_manga_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return MangaSubscribeResponse::error(message),
     };
 
@@ -351,17 +342,17 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return MangaSubscribeResponse::error("Bitte eine vollständige URL angeben.");
     }
-    if let Some(reason) = blocked_reason(&vault.system_dir(), &url) {
+    if let Some(reason) = blocked_reason(&ws.store, &url) {
         return MangaSubscribeResponse::error(reason);
     }
 
     // Re-subscribing an existing URL returns the current record unchanged.
     let id = subscription_id(&url);
-    match load_subscription(&vault.system_dir(), &id) {
+    match load_subscription(&ws.store, &id) {
         Ok(Some(existing)) => {
             return MangaSubscribeResponse {
                 subscription: Some(MangaSubscriptionSummary::from_subscription(
-                    &existing, &vault,
+                    &existing, &ws.vault,
                 )),
                 already_subscribed: true,
                 error: None,
@@ -398,7 +389,7 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
     let mut subscription = Subscription::new(url, source.id(), info.title.clone());
     // Pin the folder now: the title may change upstream later, and two series
     // can sanitize to the same segment.
-    subscription.folder_name = Some(unique_manga_folder_name(&vault, &subscription));
+    subscription.folder_name = Some(unique_manga_folder_name(&ws.vault, &subscription));
     apply_series_info(&mut subscription, &info);
     subscription.known_chapters = info
         .chapters
@@ -407,11 +398,11 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         .map(|(position, chapter)| known_chapter(position as u32 + 1, chapter))
         .collect();
 
-    match save_subscription(&vault.system_dir(), &subscription) {
+    match save_subscription(&ws.store, &subscription) {
         Ok(()) => MangaSubscribeResponse {
             subscription: Some(MangaSubscriptionSummary::from_subscription(
                 &subscription,
-                &vault,
+                &ws.vault,
             )),
             already_subscribed: false,
             error: None,
@@ -487,21 +478,21 @@ pub(crate) fn build_unsubscribe_response(body: &[u8]) -> MangaSimpleResponse {
         Ok(req) => req,
         Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_manga_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return MangaSimpleResponse::error(message),
     };
 
-    let subscription = match trash_subscription(&vault.system_dir(), &req.id) {
+    let subscription = match trash_subscription(&ws.store, &req.id) {
         Ok(Some(subscription)) => subscription,
         Ok(None) => return MangaSimpleResponse::error("Abo nicht gefunden."),
         Err(error) => return MangaSimpleResponse::error(error.to_string()),
     };
 
     if !req.keep_files {
-        let series_dir = manga_folder(&vault, &subscription);
+        let series_dir = manga_folder(&ws.vault, &subscription);
         if series_dir.exists() {
-            let trash_target = manga_trash_folder(&vault, &subscription);
+            let trash_target = manga_trash_folder(&ws.vault, &subscription);
             if let Some(parent) = trash_target.parent() {
                 fs::create_dir_all(parent).ok();
             }
@@ -529,8 +520,8 @@ pub(crate) struct MangaTrashResponse {
 /// Lists trashed manga subscriptions.
 pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
-    let vault = match resolve_manga_vault(root_override.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(root_override.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => {
             return MangaTrashResponse {
                 subscriptions: Vec::new(),
@@ -539,12 +530,12 @@ pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
         }
     };
 
-    match list_trashed_subscriptions(&vault.system_dir()) {
+    match list_trashed_subscriptions(&ws.store) {
         Ok(subscriptions) => MangaTrashResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    MangaSubscriptionSummary::from_subscription(subscription, &vault)
+                    MangaSubscriptionSummary::from_subscription(subscription, &ws.vault)
                 })
                 .collect(),
             error: None,
@@ -569,19 +560,19 @@ pub(crate) fn build_restore_response(body: &[u8]) -> MangaSimpleResponse {
         Ok(req) => req,
         Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_manga_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return MangaSimpleResponse::error(message),
     };
 
-    let subscription = match restore_subscription(&vault.system_dir(), &req.id) {
+    let subscription = match restore_subscription(&ws.store, &req.id) {
         Ok(subscription) => subscription,
         Err(error) => return MangaSimpleResponse::error(error.to_string()),
     };
 
     // Bring the files back too, when the delete moved them aside.
-    let trash_target = manga_trash_folder(&vault, &subscription);
-    let series_dir = manga_folder(&vault, &subscription);
+    let trash_target = manga_trash_folder(&ws.vault, &subscription);
+    let series_dir = manga_folder(&ws.vault, &subscription);
     if trash_target.exists() && !series_dir.exists() {
         if let Some(parent) = series_dir.parent() {
             fs::create_dir_all(parent).ok();
@@ -598,29 +589,29 @@ pub(crate) fn build_purge_response(body: &[u8]) -> MangaSimpleResponse {
         Ok(req) => req,
         Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_manga_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return MangaSimpleResponse::error(message),
     };
 
     // Read the record before purging so its pinned folder name is known; the
     // folder must never be derived from anything else at delete time.
-    let trashed = list_trashed_subscriptions(&vault.system_dir())
+    let trashed = list_trashed_subscriptions(&ws.store)
         .unwrap_or_default()
         .into_iter()
         .find(|subscription| subscription.id == req.id);
 
-    if let Err(error) = purge_trashed_subscription(&vault.system_dir(), &req.id) {
+    if let Err(error) = purge_trashed_subscription(&ws.store, &req.id) {
         return MangaSimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let trash_target = manga_trash_folder(&vault, &subscription);
+        let trash_target = manga_trash_folder(&ws.vault, &subscription);
         if trash_target.exists() {
             fs::remove_dir_all(&trash_target).ok();
         }
     }
     // Active record too, in case the id was never trashed.
-    delete_subscription(&vault.system_dir(), &req.id).ok();
+    delete_subscription(&ws.store, &req.id).ok();
 
     MangaSimpleResponse::ok()
 }
@@ -648,12 +639,12 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
         Ok(req) => req,
         Err(error) => return MangaSimpleResponse::error(format!("Invalid request: {error}")),
     };
-    let vault = match resolve_manga_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => return MangaSimpleResponse::error(message),
     };
 
-    let mut subscription = match load_subscription(&vault.system_dir(), &req.id) {
+    let mut subscription = match load_subscription(&ws.store, &req.id) {
         Ok(Some(subscription)) => subscription,
         Ok(None) => return MangaSimpleResponse::error("Abo nicht gefunden."),
         Err(error) => return MangaSimpleResponse::error(error.to_string()),
@@ -669,7 +660,7 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
         subscription.enabled = enabled;
     }
 
-    match save_subscription(&vault.system_dir(), &subscription) {
+    match save_subscription(&ws.store, &subscription) {
         Ok(()) => MangaSimpleResponse::ok(),
         Err(error) => MangaSimpleResponse::error(error.to_string()),
     }
@@ -726,8 +717,8 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
         }
     };
 
-    let vault = match resolve_manga_vault(req.root.as_deref()) {
-        Ok(vault) => vault,
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
         Err(message) => {
             return MangaCheckResponse {
                 job_id: None,
@@ -764,7 +755,7 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
     let thread_job_id = job_id.clone();
     std::thread::spawn(move || {
         let _active = CheckActiveGuard;
-        let outcome = run_check(&vault, &options, &thread_job_id);
+        let outcome = run_check(&ws.vault, &options, &thread_job_id);
         update_job(&thread_job_id, |status| match &outcome {
             Ok(message) => {
                 status.state = "done".to_string();
@@ -832,8 +823,8 @@ pub(crate) fn build_job_response(query: Option<&str>) -> MangaJobResponse {
 ///
 /// Per-subscription failures are recorded in that subscription's `last_error`
 /// and the run continues; only store failures abort the whole job.
-fn run_check(vault: &Vault, options: &CheckOptions, job_id: &str) -> Result<String> {
-    let system_dir = vault.system_dir();
+fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<String> {
+    let system_dir = ws.store;
     let all = list_subscriptions(&system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
@@ -869,7 +860,7 @@ fn run_check(vault: &Vault, options: &CheckOptions, job_id: &str) -> Result<Stri
             status.total_pages = 0;
         });
 
-        match check_one(vault, &client, &mut subscription, options, job_id) {
+        match check_one(ws, &client, &mut subscription, options, job_id) {
             Ok(downloaded) => {
                 new_chapters += downloaded;
                 subscription.last_error = None;
@@ -892,13 +883,13 @@ fn run_check(vault: &Vault, options: &CheckOptions, job_id: &str) -> Result<Stri
 
 /// Checks one subscription: refresh the chapter list, download what is missing.
 fn check_one(
-    vault: &Vault,
+    ws: &Workspace,
     client: &PoliteClient,
     subscription: &mut Subscription,
     options: &CheckOptions,
     job_id: &str,
 ) -> Result<usize> {
-    if let Some(reason) = blocked_reason(&vault.system_dir(), &subscription.url) {
+    if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
         return Err(VaultError::ExternalApi(reason));
     }
     let source = manga::require_source(&subscription.url)?;
@@ -935,7 +926,7 @@ fn check_one(
         }
     }
 
-    let series_dir = manga_folder(vault, subscription);
+    let series_dir = manga_folder(&ws.vault, subscription);
     fs::create_dir_all(&series_dir).map_err(VaultError::from)?;
     ensure_cover(client, subscription, &series_dir);
 
@@ -994,7 +985,7 @@ fn check_one(
                 downloaded += 1;
                 update_job(job_id, |status| status.downloaded += 1);
                 // Persist after every chapter so an aborted run resumes here.
-                save_subscription(&vault.system_dir(), subscription)?;
+                save_subscription(&ws.store, subscription)?;
             }
             Err(error) => {
                 consecutive_failures += 1;
@@ -1076,7 +1067,7 @@ fn download_chapter(
         });
     }
 
-    let series_dir = manga_folder(vault, subscription);
+    let series_dir = manga_folder(&ws.vault, subscription);
     let file_name = chapter_file_name(subscription, chapter, index);
     let meta = CbzMeta {
         series: subscription.title.clone(),
@@ -1093,7 +1084,7 @@ fn download_chapter(
     };
     let page_count = images.len() as u32;
     write_cbz(&series_dir.join(&file_name), &meta, &images)?;
-    write_manga_sidecar(vault, subscription, &file_name, chapter, index)?;
+    write_manga_sidecar(&ws.vault, subscription, &file_name, chapter, index)?;
     Ok(page_count)
 }
 
@@ -1179,9 +1170,9 @@ fn manga_folder_name(subscription: &Subscription) -> String {
 }
 
 /// Picks a folder name that no other subscription already uses.
-fn unique_manga_folder_name(vault: &Vault, subscription: &Subscription) -> String {
+fn unique_manga_folder_name(ws: &Workspace, subscription: &Subscription) -> String {
     let base = manga_folder_name(subscription);
-    let taken = list_subscriptions(&vault.system_dir())
+    let taken = list_subscriptions(&ws.store)
         .unwrap_or_default()
         .iter()
         .filter(|other| other.id != subscription.id)
@@ -1304,7 +1295,7 @@ fn write_manga_sidecar(
     entry.properties.episode_start = Some(clamped);
     entry.properties.episode_end = Some(clamped);
 
-    if let Some(cover_path) = manga_cover_path(&manga_folder(vault, subscription)) {
+    if let Some(cover_path) = manga_cover_path(&manga_folder(&ws.vault, subscription)) {
         if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
             entry.properties.cover_path = RelativePath::new(
                 PathBuf::from(MediaType::Manga.folder_segment())
@@ -1316,7 +1307,7 @@ fn write_manga_sidecar(
     }
 
     let yaml = render_sidecar_yaml(&entry)?;
-    write_sidecar_preview(vault, &relative, &yaml)
+    write_sidecar_preview(&ws.vault, &relative, &yaml)
 }
 
 // ---------------------------------------------------------------------------
@@ -1387,8 +1378,8 @@ mod tests {
         let vault = Vault::new(vault_root.clone()).expect("vault should construct");
         let record = subscription("Serie");
 
-        let series = manga_folder(&vault, &record);
-        let trashed = manga_trash_folder(&vault, &record);
+        let series = manga_folder(&ws.vault, &record);
+        let trashed = manga_trash_folder(&ws.vault, &record);
         assert!(series.ends_with("Manga/Serie"));
         assert!(trashed.ends_with(".trash/Manga/Serie"));
     }
