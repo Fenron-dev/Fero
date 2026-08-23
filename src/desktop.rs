@@ -372,6 +372,13 @@ fn build_select_folder_response() -> SelectFolderResponse {
 // Shared helpers (paths, app state, sidecars, query parsing)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Serialize)]
+struct AniListSearchResponse {
+    metadata: Option<AniListAnimeMetadata>,
+    results: Vec<AniListAnimeMetadata>,
+    error: Option<String>,
+}
+
 impl AniListSearchResponse {
     fn error(error: String) -> Self {
         Self {
