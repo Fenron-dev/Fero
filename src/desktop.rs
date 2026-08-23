@@ -144,10 +144,7 @@ fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             &build_anilist_search_response(request.uri().query()),
         ),
         "/api/select-folder" => json_response(StatusCode::OK, &build_select_folder_response()),
-        "/api/open-external" => json_response(
-            StatusCode::OK,
-            &build_open_external_response(request.uri().query()),
-        ),
+        "/api/reveal" => json_response(StatusCode::OK, &build_reveal_response(request.body())),
         "/api/open-url" => json_response(
             StatusCode::OK,
             &build_open_url_response(request.uri().query()),
@@ -611,82 +608,56 @@ impl OpenExternalResponse {
     }
 }
 
-/// File types `/api/open-external` may hand to the operating system.
-///
-/// An allowlist rather than a denylist: the vault holds files that arrived
-/// from imports and from web downloads, and handing an arbitrary one to `open`
-/// is equivalent to double-clicking it — a `.app`, `.command`, `.pkg` or
-/// `.terminal` would execute code.
-const OPENABLE_EXTENSIONS: &[&str] = &[
-    // Video
-    "mp4", "m4v", "mkv", "avi", "mov", "webm", "mpg", "mpeg", "wmv", "flv", "ts", "m2ts",
-    // Audio
-    "mp3", "m4a", "m4b", "flac", "ogg", "opus", "wav", "aac", "wma", "aiff",
-    // Documents / books
-    "pdf", "epub", "mobi", "azw3", "cbz", "cbr", "txt", "md", "yaml", "yml", "json", "nfo", "srt",
-    "vtt", "ass", // Images
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "avif",
-];
-
-/// Whether a path carries an extension from [`OPENABLE_EXTENSIONS`].
-fn is_openable_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .is_some_and(|extension| OPENABLE_EXTENSIONS.contains(&extension.as_str()))
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RevealRequest {
+    /// Subscription whose folder should be shown.
+    id: String,
+    /// Media kind id, see `MediaKind::id`.
+    kind: String,
 }
 
-/// Shows a file in Finder.
+/// Shows a subscription's work folder in the system file manager.
 ///
-/// Still takes a path relative to the legacy library root. With per-work
-/// targets that is no longer the right addressing scheme — this should take a
-/// subscription id and derive the folder itself, which lands together with the
-/// new frontend.
-fn build_open_external_response(query: Option<&str>) -> OpenExternalResponse {
-    let query = match query {
-        Some(q) => q,
-        None => return OpenExternalResponse::error("missing query"),
+/// Takes a subscription id rather than a path: with a delivery target per work
+/// there is no shared root to make a path relative to, and deriving the folder
+/// here means no caller can ask for a directory Fero does not own.
+fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
+    let req: RevealRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return OpenExternalResponse::error(format!("Invalid request: {error}")),
     };
-
-    let path = match extract_query_value(query, "path") {
-        Some(p) => p,
-        None => return OpenExternalResponse::error("missing path"),
+    let Some(kind) = MediaKind::from_id(&req.kind) else {
+        return OpenExternalResponse::error(format!("Unbekannter Medientyp: {}", req.kind));
     };
-
-    let root_override = extract_query_value(query, "root");
-    let vault_root = match resolve_vault_root(root_override.as_deref()) {
-        Ok(Some(r)) => r,
-        Ok(None) => return OpenExternalResponse::error("Kein Vault geöffnet."),
-        Err(e) => return OpenExternalResponse::error(e.to_string()),
+    let ws = match resolve_workspace(None) {
+        Ok(ws) => ws,
+        Err(message) => return OpenExternalResponse::error(message),
     };
-
-    let vault = match Vault::new(vault_root) {
-        Ok(v) => v,
-        Err(e) => return OpenExternalResponse::error(e.to_string()),
+    let subscription = match load_subscription(&ws.store, &req.id) {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return OpenExternalResponse::error("Abo nicht gefunden."),
+        Err(error) => return OpenExternalResponse::error(error.to_string()),
     };
-
-    let relative = match RelativePath::new(&path) {
-        Ok(r) => r,
-        Err(e) => return OpenExternalResponse::error(e.to_string()),
+    let parent = match ws.delivery_parent(kind, &subscription) {
+        Ok(parent) => parent,
+        Err(error) => return OpenExternalResponse::error(error.to_string()),
     };
-
-    let absolute = match vault.resolve_existing(relative.as_path()) {
-        Ok(p) => p,
-        Err(e) => return OpenExternalResponse::error(e.to_string()),
+    let folder = match kind {
+        MediaKind::Manga => parent.join(crate::desktop_manga::folder_name(&subscription)),
+        _ => webnovel_folder(&parent, &subscription),
     };
-
-    if !is_openable_extension(&absolute) {
+    if !folder.is_dir() {
         return OpenExternalResponse::error(
-            "Dieser Dateityp wird aus Sicherheitsgründen nicht geöffnet.".to_string(),
+            "Für dieses Abo wurde noch nichts heruntergeladen.".to_string(),
         );
     }
 
-    // `open` on macOS launches the file with the default app; equivalent to
-    // double-clicking in Finder. This is fire-and-forget — we only care that
-    // the process started, not how it exits.
-    match std::process::Command::new("open").arg(&absolute).spawn() {
+    // `open -R` reveals the target in Finder instead of launching it. Fero
+    // shows where files are; opening them is the library's job.
+    match std::process::Command::new("open").arg("-R").arg(&folder).spawn() {
         Ok(_) => OpenExternalResponse::ok(),
-        Err(e) => OpenExternalResponse::error(format!("open failed: {e}")),
+        Err(error) => OpenExternalResponse::error(format!("open failed: {error}")),
     }
 }
 

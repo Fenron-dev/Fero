@@ -1200,7 +1200,9 @@ fn ensure_cover(client: &PoliteClient, subscription: &Subscription, series_dir: 
 /// one level.  Without that guarantee a series whose scraped title sanitizes
 /// to nothing would resolve to the parent directory, and a per-series delete
 /// would take the whole library with it.
-fn manga_folder_name(subscription: &Subscription) -> String {
+/// Folder name for a series, exported so the reveal route can find it without
+/// duplicating the sanitising rules.
+pub(crate) fn folder_name(subscription: &Subscription) -> String {
     if let Some(pinned) = subscription.folder_name.as_deref() {
         let sanitized = sanitize_path_segment(pinned);
         if !sanitized.is_empty() {
@@ -1215,12 +1217,12 @@ fn manga_folder_name(subscription: &Subscription) -> String {
 
 /// Picks a folder name that no other subscription already uses.
 fn unique_manga_folder_name(ws: &Workspace, subscription: &Subscription) -> String {
-    let base = manga_folder_name(subscription);
+    let base = folder_name(subscription);
     let taken = list_subscriptions(&ws.store)
         .unwrap_or_default()
         .iter()
         .filter(|other| other.id != subscription.id)
-        .any(|other| manga_folder_name(other) == base);
+        .any(|other| folder_name(other) == base);
 
     if taken {
         format!("{base} ({})", subscription.id)
@@ -1233,7 +1235,7 @@ fn unique_manga_folder_name(ws: &Workspace, subscription: &Subscription) -> Stri
 /// Directory holding one series' files. The parent comes from the target
 /// chain and is resolved by the caller, so this stays a pure join.
 fn manga_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
-    delivery_parent.join(manga_folder_name(subscription))
+    delivery_parent.join(folder_name(subscription))
 }
 
 /// Trash location mirroring [`manga_folder`].
@@ -1242,7 +1244,7 @@ fn manga_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf 
 fn manga_trash_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
     delivery_parent
         .join(".trash")
-        .join(manga_folder_name(subscription))
+        .join(folder_name(subscription))
 }
 
 /// Returns the existing cover file path inside a series folder, if any.
@@ -1264,7 +1266,7 @@ fn chapter_file_name(subscription: &Subscription, chapter: &MangaChapterRef, ind
         .as_deref()
         .and_then(pad_chapter_number)
         .unwrap_or_else(|| format!("{index:04}"));
-    let safe_title = manga_folder_name(subscription);
+    let safe_title = folder_name(subscription);
     sanitize_path_segment(&format!("{safe_title} - Kapitel {label}.cbz"))
 }
 
@@ -1377,7 +1379,7 @@ mod tests {
         for title in ["..", ".", "", "../../etc", "/absolute"] {
             let mut record = subscription(title);
             record.folder_name = Some(title.to_string());
-            let name = manga_folder_name(&record);
+            let name = folder_name(&record);
             assert!(
                 !name.is_empty(),
                 "title {title:?} produced an empty segment"

@@ -435,12 +435,14 @@ $("detail-source").addEventListener("click", async () => {
   }
 });
 
-$("detail-open").addEventListener("click", () => {
-  setFeedback(
-    $("detail-feedback"),
-    "Ordner anzeigen folgt, sobald die Route auf Abo-Ids umgestellt ist.",
-    "error"
-  );
+$("detail-open").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  try {
+    await post("reveal", { id: item.id, kind: item.kind });
+  } catch (error) {
+    setFeedback($("detail-feedback"), error.message, "error");
+  }
 });
 
 $("detail-delete").addEventListener("click", async () => {
