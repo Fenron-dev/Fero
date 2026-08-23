@@ -15,7 +15,7 @@ use crate::api::novel::{
     PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
-use crate::core::vault::Vault;
+use crate::core::vault::{RelativePath, Vault};
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
@@ -629,6 +629,12 @@ fn is_openable_extension(path: &Path) -> bool {
         .is_some_and(|extension| OPENABLE_EXTENSIONS.contains(&extension.as_str()))
 }
 
+/// Shows a file in Finder.
+///
+/// Still takes a path relative to the legacy library root. With per-work
+/// targets that is no longer the right addressing scheme — this should take a
+/// subscription id and derive the folder itself, which lands together with the
+/// new frontend.
 fn build_open_external_response(query: Option<&str>) -> OpenExternalResponse {
     let query = match query {
         Some(q) => q,
