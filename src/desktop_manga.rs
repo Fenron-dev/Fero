@@ -44,11 +44,12 @@ use crate::core::manga::{
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
     save_subscription, subscription_id, trash_subscription, unix_now, KnownChapter, Subscription,
 };
-use crate::core::properties::render_sidecar_yaml;
 use crate::core::vault::{RelativePath, Vault};
+use crate::deliver::manifest;
+use crate::deliver::targets::MediaKind;
 use crate::desktop::{
     debug_log, extract_query_value, resolve_workspace, safe_folder_segment, sanitize_path_segment,
-    write_sidecar_preview, Workspace,
+    Workspace,
 };
 use crate::error::{Result, VaultError};
 use crate::media::{MediaEntry, MediaStatus, MediaType, PropertySource};
@@ -207,7 +208,8 @@ pub(crate) struct MangaSubscriptionSummary {
     rating_external: Option<f32>,
     /// Vault-relative path of the cached cover image, when one exists.
     #[serde(skip_serializing_if = "Option::is_none")]
-    cover_path: Option<String>,
+    /// Whether a cached cover exists in the series folder.
+    has_cover: bool,
     completed: bool,
     hiatus: bool,
     enabled: bool,
@@ -220,14 +222,12 @@ pub(crate) struct MangaSubscriptionSummary {
 }
 
 impl MangaSubscriptionSummary {
-    fn from_subscription(subscription: &Subscription, vault: &Vault) -> Self {
-        let cover_path =
-            manga_cover_path(&manga_folder(vault, subscription)).and_then(|absolute| {
-                vault
-                    .relative_from_absolute(&absolute)
-                    .ok()
-                    .map(|relative| relative.to_string())
-            });
+    /// Builds the summary. `work_dir` is `None` when no target is configured
+    /// yet — the subscription is still listed, just without a cover.
+    fn from_subscription(subscription: &Subscription, work_dir: Option<&Path>) -> Self {
+        let has_cover = work_dir
+            .map(|dir| manga_cover_path(dir).is_some())
+            .unwrap_or(false);
         Self {
             id: subscription.id.clone(),
             url: subscription.url.clone(),
@@ -240,7 +240,7 @@ impl MangaSubscriptionSummary {
             tags: subscription.tags.clone(),
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
-            cover_path,
+            has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
             enabled: subscription.enabled,
@@ -282,7 +282,10 @@ pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    MangaSubscriptionSummary::from_subscription(subscription, &ws.vault)
+                    let work_dir = ws
+                        .delivery_parent_opt(MediaKind::Manga, subscription)
+                        .map(|parent| manga_folder(&parent, subscription));
+                    MangaSubscriptionSummary::from_subscription(subscription, work_dir.as_deref())
                 })
                 .collect(),
             error: None,
@@ -352,7 +355,10 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         Ok(Some(existing)) => {
             return MangaSubscribeResponse {
                 subscription: Some(MangaSubscriptionSummary::from_subscription(
-                    &existing, &ws.vault,
+                    &existing,
+                    ws.delivery_parent_opt(MediaKind::Manga, &existing)
+                        .map(|parent| manga_folder(&parent, &existing))
+                        .as_deref(),
                 )),
                 already_subscribed: true,
                 error: None,
@@ -402,7 +408,9 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         Ok(()) => MangaSubscribeResponse {
             subscription: Some(MangaSubscriptionSummary::from_subscription(
                 &subscription,
-                &ws.vault,
+                ws.delivery_parent_opt(MediaKind::Manga, &subscription)
+                    .map(|parent| manga_folder(&parent, &subscription))
+                    .as_deref(),
             )),
             already_subscribed: false,
             error: None,
@@ -490,9 +498,13 @@ pub(crate) fn build_unsubscribe_response(body: &[u8]) -> MangaSimpleResponse {
     };
 
     if !req.keep_files {
-        let series_dir = manga_folder(&ws.vault, &subscription);
+        let parent = match ws.delivery_parent(MediaKind::Manga, &subscription) {
+            Ok(parent) => parent,
+            Err(error) => return MangaSimpleResponse::error(error.to_string()),
+        };
+        let series_dir = manga_folder(&parent, &subscription);
         if series_dir.exists() {
-            let trash_target = manga_trash_folder(&ws.vault, &subscription);
+            let trash_target = manga_trash_folder(&parent, &subscription);
             if let Some(parent) = trash_target.parent() {
                 fs::create_dir_all(parent).ok();
             }
@@ -535,7 +547,10 @@ pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    MangaSubscriptionSummary::from_subscription(subscription, &ws.vault)
+                    let work_dir = ws
+                        .delivery_parent_opt(MediaKind::Manga, subscription)
+                        .map(|parent| manga_folder(&parent, subscription));
+                    MangaSubscriptionSummary::from_subscription(subscription, work_dir.as_deref())
                 })
                 .collect(),
             error: None,
@@ -571,8 +586,12 @@ pub(crate) fn build_restore_response(body: &[u8]) -> MangaSimpleResponse {
     };
 
     // Bring the files back too, when the delete moved them aside.
-    let trash_target = manga_trash_folder(&ws.vault, &subscription);
-    let series_dir = manga_folder(&ws.vault, &subscription);
+    let parent = match ws.delivery_parent(MediaKind::Manga, &subscription) {
+        Ok(parent) => parent,
+        Err(error) => return MangaSimpleResponse::error(error.to_string()),
+    };
+    let trash_target = manga_trash_folder(&parent, &subscription);
+    let series_dir = manga_folder(&parent, &subscription);
     if trash_target.exists() && !series_dir.exists() {
         if let Some(parent) = series_dir.parent() {
             fs::create_dir_all(parent).ok();
@@ -605,7 +624,12 @@ pub(crate) fn build_purge_response(body: &[u8]) -> MangaSimpleResponse {
         return MangaSimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let trash_target = manga_trash_folder(&ws.vault, &subscription);
+        let Ok(parent) = ws.delivery_parent(MediaKind::Manga, &subscription) else {
+            return MangaSimpleResponse::error(
+                "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
+            );
+        };
+        let trash_target = manga_trash_folder(&parent, &subscription);
         if trash_target.exists() {
             fs::remove_dir_all(&trash_target).ok();
         }
@@ -926,7 +950,8 @@ fn check_one(
         }
     }
 
-    let series_dir = manga_folder(&ws.vault, subscription);
+    let parent = ws.delivery_parent(MediaKind::Manga, subscription)?;
+    let series_dir = manga_folder(&parent, subscription);
     fs::create_dir_all(&series_dir).map_err(VaultError::from)?;
     ensure_cover(client, subscription, &series_dir);
 
@@ -968,7 +993,7 @@ fn check_one(
         };
 
         match download_chapter(
-            &ws.vault,
+            &parent,
             client,
             source.as_ref(),
             subscription,
@@ -1022,7 +1047,7 @@ fn check_one(
 
 /// Downloads one chapter's pages and writes the CBZ. Returns the page count.
 fn download_chapter(
-    vault: &Vault,
+    delivery_parent: &Path,
     client: &PoliteClient,
     source: &dyn manga::MangaSource,
     subscription: &Subscription,
@@ -1067,7 +1092,7 @@ fn download_chapter(
         });
     }
 
-    let series_dir = manga_folder(vault, subscription);
+    let series_dir = manga_folder(delivery_parent, subscription);
     let file_name = chapter_file_name(subscription, chapter, index);
     let meta = CbzMeta {
         series: subscription.title.clone(),
@@ -1084,7 +1109,7 @@ fn download_chapter(
     };
     let page_count = images.len() as u32;
     write_cbz(&series_dir.join(&file_name), &meta, &images)?;
-    write_manga_sidecar(vault, subscription, &file_name, chapter, index)?;
+    record_delivery(series_dir, subscription, &file_name, index)?;
     Ok(page_count)
 }
 
@@ -1186,19 +1211,18 @@ fn unique_manga_folder_name(ws: &Workspace, subscription: &Subscription) -> Stri
 }
 
 /// Vault location of a series' files.
-fn manga_folder(vault: &Vault, subscription: &Subscription) -> PathBuf {
-    vault
-        .root()
-        .join(MediaType::Manga.folder_segment())
-        .join(manga_folder_name(subscription))
+/// Directory holding one series' files. The parent comes from the target
+/// chain and is resolved by the caller, so this stays a pure join.
+fn manga_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
+    delivery_parent.join(manga_folder_name(subscription))
 }
 
 /// Trash location mirroring [`manga_folder`].
-fn manga_trash_folder(vault: &Vault, subscription: &Subscription) -> PathBuf {
-    vault
-        .root()
+/// Where a deleted series' files are parked, next to where they were
+/// delivered — with per-work targets there is no single library root any more.
+fn manga_trash_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
+    delivery_parent
         .join(".trash")
-        .join(MediaType::Manga.folder_segment())
         .join(manga_folder_name(subscription))
 }
 
@@ -1242,72 +1266,44 @@ fn pad_chapter_number(number: &str) -> Option<String> {
 ///
 /// Only called when a CBZ is newly written: re-writing every sidecar on every
 /// check would mean thousands of file writes for a long-running series.
-fn write_manga_sidecar(
-    vault: &Vault,
+/// Records a delivered chapter in the series folder's `fero.info.json`.
+///
+/// Replaces the former `.fero.yaml` sidecar; descriptive metadata belongs in
+/// the CBZ's `ComicInfo.xml`, where any reader can see it.
+fn record_delivery(
+    series_dir: &Path,
     subscription: &Subscription,
     file_name: &str,
-    chapter: &MangaChapterRef,
     index: u32,
 ) -> Result<()> {
-    let safe_title = manga_folder_name(subscription);
-    let relative = RelativePath::new(
-        PathBuf::from(MediaType::Manga.folder_segment())
-            .join(&safe_title)
-            .join(file_name),
-    )?;
-
-    let entry_id = format!("{}-ch-{index:04}", subscription.id);
-    let mut entry = MediaEntry::new(&entry_id, MediaType::Manga, relative.clone(), file_name);
-    entry.source = PropertySource::Api;
-    entry.created_at_unix = unix_now();
-    entry.updated_at_unix = entry.created_at_unix;
-    entry.properties.title = Some(chapter.title.clone());
-    entry.properties.series_title = Some(subscription.title.clone());
-    entry.properties.author = subscription.author.clone();
-    entry.properties.description = subscription.description.clone();
-    entry.properties.genres = subscription.genres.clone();
-    entry.properties.tags = subscription.tags.clone();
-    entry.properties.anilist_id = subscription.anilist_id;
-    entry.properties.anilist_url = subscription.anilist_url.clone();
-    entry.properties.rating_external = subscription.rating_external;
-    entry.properties.notes = Some(format!("Quelle: {}", chapter.url));
-    entry.properties.status = Some(if subscription.completed {
-        MediaStatus::Completed
+    let mut record = manifest::load_or_new(
+        series_dir,
+        &subscription.id,
+        MediaKind::Manga,
+        &subscription.url,
+        &subscription.title,
+    );
+    record.title = subscription.title.clone();
+    record.status = if subscription.completed {
+        manifest::SeriesStatus::Completed
     } else if subscription.hiatus {
-        MediaStatus::OnHold
+        manifest::SeriesStatus::Hiatus
     } else {
-        MediaStatus::InLibrary
-    });
-    // Chapter numbers double as the episode range so list views can sort.
-    let chapter_number = chapter
-        .number
-        .as_deref()
-        .and_then(|number| {
-            number
-                .split('.')
-                .next()
-                .unwrap_or(number)
-                .parse::<u32>()
-                .ok()
+        manifest::SeriesStatus::Ongoing
+    };
+    record.last_check_unix = Some(unix_now());
+    record.record_file(file_name, Some((index, index)), unix_now());
+    record.chapters = subscription
+        .known_chapters
+        .iter()
+        .filter(|chapter| chapter.downloaded_at_unix.is_some())
+        .map(|chapter| manifest::ChapterRecord {
+            index: chapter.index,
+            title: chapter.title.clone(),
+            downloaded_at_unix: chapter.downloaded_at_unix.unwrap_or_default(),
         })
-        .unwrap_or(index);
-    let clamped = chapter_number.min(u32::from(u16::MAX)) as u16;
-    entry.properties.episode_start = Some(clamped);
-    entry.properties.episode_end = Some(clamped);
-
-    if let Some(cover_path) = manga_cover_path(&manga_folder(vault, subscription)) {
-        if let Some(cover_name) = cover_path.file_name().and_then(|name| name.to_str()) {
-            entry.properties.cover_path = RelativePath::new(
-                PathBuf::from(MediaType::Manga.folder_segment())
-                    .join(&safe_title)
-                    .join(cover_name),
-            )
-            .ok();
-        }
-    }
-
-    let yaml = render_sidecar_yaml(&entry)?;
-    write_sidecar_preview(vault, &relative, &yaml)
+        .collect();
+    manifest::save(series_dir, &record)
 }
 
 // ---------------------------------------------------------------------------

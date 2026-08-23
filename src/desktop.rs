@@ -15,7 +15,6 @@ use crate::api::novel::{
     PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
-use crate::core::properties::{legacy_sidecar_path_for, sidecar_path_for};
 use crate::core::vault::{RelativePath, Vault};
 use crate::core::webnovel::{
     blocked_reason, list_subscriptions, list_trashed_subscriptions, load_blocklist_entries,
@@ -350,31 +349,6 @@ struct SelectFolderResponse {
     error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-struct ParsedSidecar {
-    media_type: Option<MediaType>,
-    title: Option<String>,
-    year: Option<u16>,
-    series_title: Option<String>,
-    season_number: Option<u16>,
-    episode_start: Option<u16>,
-    episode_end: Option<u16>,
-    episode_title: Option<String>,
-    episode_count: Option<u16>,
-    runtime_minutes: Option<u16>,
-    average_score: Option<f32>,
-    format: Option<String>,
-    airing_season: Option<String>,
-    anilist_id: Option<u32>,
-    anilist_url: Option<String>,
-    status: Option<MediaStatus>,
-    description: Option<String>,
-    rating_external: Option<f32>,
-    author: Option<String>,
-    genres: Vec<String>,
-    tags: Vec<String>,
-}
-
 /// Longest path segment we generate. Well below the 255-byte limit of APFS,
 /// ext4 and NTFS even after multi-byte characters are counted.
 const MAX_PATH_SEGMENT_CHARS: usize = 120;
@@ -465,38 +439,6 @@ pub(crate) fn extract_query_value(query: &str, wanted_key: &str) -> Option<Strin
     }
 
     None
-}
-
-pub(crate) fn write_sidecar_preview(
-    vault: &Vault,
-    media_relative: &RelativePath,
-    sidecar_preview: &str,
-) -> Result<()> {
-    let sidecar_relative = sidecar_path_for(media_relative)?;
-    let sidecar_absolute = vault.resolve(sidecar_relative.as_path())?;
-    let sidecar_parent = sidecar_absolute.parent().ok_or_else(|| {
-        VaultError::InvalidVaultPath(format!(
-            "Sidecar-Pfad hat keinen Elternordner: {}",
-            sidecar_relative
-        ))
-    })?;
-    fs::create_dir_all(sidecar_parent).map_err(VaultError::from)?;
-    fs::write(&sidecar_absolute, sidecar_preview.as_bytes()).map_err(VaultError::from)?;
-
-    // Drop sidecars written under an older naming scheme so a file never has
-    // two competing metadata records. Best effort: the new sidecar is already
-    // on disk, and failing to remove a stale one must not fail the save.
-    for stale in sidecar_candidates(media_relative)?
-        .into_iter()
-        .skip(1)
-        .filter_map(|candidate| vault.resolve(candidate.as_path()).ok())
-    {
-        if stale != sidecar_absolute && stale.exists() {
-            let _ = fs::remove_file(stale);
-        }
-    }
-
-    Ok(())
 }
 
 pub(crate) fn resolve_vault_root(root_override: Option<&str>) -> Result<Option<PathBuf>> {
@@ -635,164 +577,6 @@ fn is_authorized_root(root: &Path) -> bool {
     env::var("FERO_VAULT_ROOT")
         .ok()
         .is_some_and(|configured| matches(&configured))
-}
-
-/// Finds an existing sidecar for a media file, newest naming scheme first.
-///
-/// Three shapes are recognised, in priority order:
-/// 1. `Film.mkv.fero.yaml` — current
-/// 2. `Film.fero.yaml` — pre-1.0, replaced the extension
-/// 3. `Film.mediashelf.yaml` — pre-rename
-///
-/// Older files are only read; writing always produces shape 1 (see
-/// [`write_sidecar_preview`]).
-fn find_sidecar_file(vault: &Vault, media_path: &RelativePath) -> Result<Option<PathBuf>> {
-    for candidate in sidecar_candidates(media_path)? {
-        let absolute = vault.resolve(candidate.as_path())?;
-        if absolute.exists() {
-            return Ok(Some(absolute));
-        }
-    }
-
-    Ok(None)
-}
-
-/// All sidecar paths that may exist for a media file, current shape first.
-fn sidecar_candidates(media_path: &RelativePath) -> Result<Vec<RelativePath>> {
-    let mut candidates = vec![sidecar_path_for(media_path)?];
-
-    if let Ok(legacy) = legacy_sidecar_path_for(media_path) {
-        candidates.push(legacy);
-    }
-
-    let mut pre_rename = media_path.to_path_buf();
-    pre_rename.set_extension("mediashelf.yaml");
-    if let Ok(pre_rename) = RelativePath::new(pre_rename) {
-        candidates.push(pre_rename);
-    }
-
-    Ok(candidates)
-}
-
-fn parse_sidecar_metadata(raw: &str) -> Result<ParsedSidecar> {
-    let mut sidecar = ParsedSidecar::default();
-    let lines = raw.lines();
-    // Tracks which list ("genres"/"tags") the following "- item" lines feed.
-    let mut active_list: Option<&str> = None;
-
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed == "---" {
-            active_list = None;
-            continue;
-        }
-
-        // List entries rendered as `  - "value"` under a "genres:"/"tags:" key.
-        if let Some(entry) = trimmed.strip_prefix("- ") {
-            let value = unquote_yaml(entry);
-            match active_list {
-                Some("genres") if !value.is_empty() => sidecar.genres.push(value),
-                Some("tags") if !value.is_empty() => sidecar.tags.push(value),
-                _ => {}
-            }
-            continue;
-        }
-
-        let Some((key, value)) = trimmed.split_once(':') else {
-            active_list = None;
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        active_list = match (key, value.is_empty()) {
-            ("genres", true) => Some("genres"),
-            ("tags", true) => Some("tags"),
-            _ => None,
-        };
-
-        match key {
-            "media_type" => sidecar.media_type = parse_media_type(unquote_yaml(value)),
-            "title" => sidecar.title = Some(unquote_yaml(value)),
-            "year" => sidecar.year = value.parse::<u16>().ok(),
-            "series_title" => sidecar.series_title = Some(unquote_yaml(value)),
-            "season_number" => sidecar.season_number = value.parse::<u16>().ok(),
-            "episode_start" => sidecar.episode_start = value.parse::<u16>().ok(),
-            "episode_end" => sidecar.episode_end = value.parse::<u16>().ok(),
-            "episode_title" => sidecar.episode_title = Some(unquote_yaml(value)),
-            "episode_count" => sidecar.episode_count = value.parse::<u16>().ok(),
-            "runtime_minutes" => sidecar.runtime_minutes = value.parse::<u16>().ok(),
-            "average_score" => sidecar.average_score = value.parse::<f32>().ok(),
-            "format" => sidecar.format = Some(unquote_yaml(value)),
-            "airing_season" => sidecar.airing_season = Some(unquote_yaml(value)),
-            "anilist_id" => sidecar.anilist_id = value.parse::<u32>().ok(),
-            "anilist_url" => sidecar.anilist_url = Some(unquote_yaml(value)),
-            "status" => sidecar.status = parse_media_status(unquote_yaml(value).as_str()),
-            "description" => sidecar.description = Some(unquote_yaml(value)),
-            "author" => sidecar.author = Some(unquote_yaml(value)),
-            "rating_external" => sidecar.rating_external = value.parse::<f32>().ok(),
-            _ => {}
-        }
-    }
-
-    Ok(sidecar)
-}
-
-fn unquote_yaml(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.len() >= 2 {
-        let is_double = trimmed.starts_with('"') && trimmed.ends_with('"');
-        let is_single = trimmed.starts_with('\'') && trimmed.ends_with('\'');
-        if is_double || is_single {
-            return trimmed[1..trimmed.len() - 1]
-                .replace("\\n", "\n")
-                .replace("\\\"", "\"")
-                .replace("\\'", "'")
-                .replace("\\\\", "\\");
-        }
-    }
-    trimmed.to_string()
-}
-
-fn parse_media_type(value: String) -> Option<MediaType> {
-    match value.trim().to_lowercase().as_str() {
-        "film" => Some(MediaType::Film),
-        "series" => Some(MediaType::Series),
-        "anime" => Some(MediaType::Anime),
-        "hentai-anime" => Some(MediaType::HentaiAnime),
-        "book" => Some(MediaType::Book),
-        "ebook" => Some(MediaType::Ebook),
-        "webnovel" => Some(MediaType::Webnovel),
-        "comic" => Some(MediaType::Comic),
-        "manga" => Some(MediaType::Manga),
-        "music-album" => Some(MediaType::MusicAlbum),
-        "music-track" => Some(MediaType::MusicTrack),
-        "podcast" => Some(MediaType::Podcast),
-        "audiobook" => Some(MediaType::Audiobook),
-        "video-game" => Some(MediaType::VideoGame),
-        "document" => Some(MediaType::Document),
-        "photo" => Some(MediaType::Photo),
-        "video-misc" => Some(MediaType::VideoMisc),
-        "archive" => Some(MediaType::Archive),
-        "image" => Some(MediaType::Image),
-        "software" => Some(MediaType::Software),
-        "3d-model" => Some(MediaType::Model3D),
-        "unclassified" => Some(MediaType::Unclassified),
-        _ => None,
-    }
-}
-
-fn parse_media_status(value: &str) -> Option<MediaStatus> {
-    match value.trim().to_lowercase().as_str() {
-        "inbox" => Some(MediaStatus::Inbox),
-        "needs-review" => Some(MediaStatus::NeedsReview),
-        "in-library" => Some(MediaStatus::InLibrary),
-        "wishlist" => Some(MediaStatus::Wishlist),
-        "completed" => Some(MediaStatus::Completed),
-        "on-hold" => Some(MediaStatus::OnHold),
-        "archived" => Some(MediaStatus::Archived),
-        "ignored" => Some(MediaStatus::Ignored),
-        _ => None,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,7 +875,9 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    let work_dir = ws.work_dir(MediaKind::Webnovel, subscription);
+                    let work_dir = ws
+                        .delivery_parent_opt(MediaKind::Webnovel, subscription)
+                        .map(|parent| webnovel_folder(&parent, subscription));
                     WebnovelSubscriptionSummary::from_subscription(
                         subscription,
                         work_dir.as_deref(),
@@ -1147,17 +933,18 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// Work folder for a subscription, or `None` when no target is configured.
+    /// Delivery parent, or `None` when no usable target is configured.
     ///
-    /// For read-only views: a subscription without a usable target is still
-    /// worth listing, just without the things that live in its folder.
-    pub(crate) fn work_dir(&self, kind: MediaKind, subscription: &Subscription) -> Option<PathBuf> {
-        self.delivery_parent(kind, subscription)
-            .ok()
-            .map(|parent| match kind {
-                MediaKind::Webnovel => webnovel_folder(&parent, subscription),
-                _ => parent.join(novel_folder_name(subscription)),
-            })
+    /// For read-only views: a subscription without a target is still worth
+    /// listing, just without the things that live in its folder. Deliberately
+    /// returns the *parent* — how a work folder is named is the business of the
+    /// media kind's module, not of the workspace.
+    pub(crate) fn delivery_parent_opt(
+        &self,
+        kind: MediaKind,
+        subscription: &Subscription,
+    ) -> Option<PathBuf> {
+        self.delivery_parent(kind, subscription).ok()
     }
 }
 
@@ -1259,7 +1046,9 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
             return WebnovelSubscribeResponse {
                 subscription: Some(WebnovelSubscriptionSummary::from_subscription(
                     &existing,
-                    ws.work_dir(MediaKind::Webnovel, &existing).as_deref(),
+                    ws.delivery_parent_opt(MediaKind::Webnovel, &existing)
+                        .map(|parent| webnovel_folder(&parent, &existing))
+                        .as_deref(),
                 )),
                 already_subscribed: true,
                 error: None,
@@ -1331,7 +1120,9 @@ fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
         Ok(()) => WebnovelSubscribeResponse {
             subscription: Some(WebnovelSubscriptionSummary::from_subscription(
                 &subscription,
-                ws.work_dir(MediaKind::Webnovel, &subscription).as_deref(),
+                ws.delivery_parent_opt(MediaKind::Webnovel, &subscription)
+                    .map(|parent| webnovel_folder(&parent, &subscription))
+                    .as_deref(),
             )),
             already_subscribed: false,
             error: None,
@@ -2382,7 +2173,6 @@ fn build_complete_epub(novel_dir: &Path, subscription: &Subscription) -> Result<
 
     record_delivery(novel_dir, subscription, &file_name, None)
 }
-
 
 /// Records a delivered file in the work folder's `fero.info.json`.
 ///
