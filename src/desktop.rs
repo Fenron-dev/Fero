@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
@@ -2827,45 +2826,6 @@ pub(crate) fn extract_query_value(query: &str, wanted_key: &str) -> Option<Strin
     }
 
     None
-}
-
-fn media_content_type(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        // Images
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("bmp") => "image/bmp",
-        Some("svg") => "image/svg+xml",
-        Some("avif") => "image/avif",
-        Some("tif" | "tiff") => "image/tiff",
-        // Video (natively supported by macOS WKWebView)
-        Some("mp4" | "m4v") => "video/mp4",
-        Some("mov") => "video/quicktime",
-        Some("webm") => "video/webm",
-        Some("ogv") => "video/ogg",
-        Some("avi") => "video/x-msvideo",
-        Some("mkv") => "video/x-matroska",
-        // Audio
-        Some("mp3") => "audio/mpeg",
-        Some("m4a" | "m4b") => "audio/mp4",
-        Some("aac") => "audio/aac",
-        Some("ogg" | "oga") => "audio/ogg",
-        Some("opus") => "audio/opus",
-        Some("flac") => "audio/flac",
-        Some("wav") => "audio/wav",
-        Some("weba") => "audio/webm",
-        // Documents
-        Some("pdf") => "application/pdf",
-        Some("epub") => "application/epub+zip",
-        _ => "application/octet-stream",
-    }
 }
 
 fn apply_import_item(vault: &Vault, item: &ApplyImportItem) -> Result<()> {
