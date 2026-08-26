@@ -1,7 +1,6 @@
 #![doc = "Fero core foundation."]
 
 mod desktop;
-mod desktop_manga;
 
 pub mod api;
 pub mod core;

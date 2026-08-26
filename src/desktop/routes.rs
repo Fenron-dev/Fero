@@ -123,41 +123,41 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             StatusCode::NOT_FOUND,
         ),
         // Manga subscriptions mirror the webnovel endpoints one for one; the
-        // handlers live in `desktop_manga` to keep this file from growing.
+        // handlers live in `manga` to keep this file from growing.
         "/api/manga/list" => json_outcome(
-            &crate::desktop_manga::build_list_response(request.uri().query()),
+            &manga::build_list_response(request.uri().query()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
         "/api/manga/subscribe" => json_outcome(
-            &crate::desktop_manga::build_subscribe_response(request.body()),
+            &manga::build_subscribe_response(request.body()),
             StatusCode::BAD_REQUEST,
         ),
         "/api/manga/unsubscribe" => json_outcome(
-            &crate::desktop_manga::build_unsubscribe_response(request.body()),
+            &manga::build_unsubscribe_response(request.body()),
             StatusCode::NOT_FOUND,
         ),
         "/api/manga/update" => json_outcome(
-            &crate::desktop_manga::build_update_response(request.body()),
+            &manga::build_update_response(request.body()),
             StatusCode::NOT_FOUND,
         ),
         "/api/manga/check" => json_outcome(
-            &crate::desktop_manga::build_check_response(request.body()),
+            &manga::build_check_response(request.body()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
         "/api/manga/job" => json_outcome(
-            &crate::desktop_manga::build_job_response(request.uri().query()),
+            &manga::build_job_response(request.uri().query()),
             StatusCode::NOT_FOUND,
         ),
         "/api/manga/trash" => json_outcome(
-            &crate::desktop_manga::build_trash_response(request.uri().query()),
+            &manga::build_trash_response(request.uri().query()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
         "/api/manga/restore" => json_outcome(
-            &crate::desktop_manga::build_restore_response(request.body()),
+            &manga::build_restore_response(request.body()),
             StatusCode::NOT_FOUND,
         ),
         "/api/manga/purge" => json_outcome(
-            &crate::desktop_manga::build_purge_response(request.body()),
+            &manga::build_purge_response(request.body()),
             StatusCode::NOT_FOUND,
         ),
         _ => response(

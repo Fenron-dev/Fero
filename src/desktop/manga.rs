@@ -46,7 +46,7 @@ use crate::core::manga::{
 };
 use crate::deliver::manifest;
 use crate::deliver::targets::MediaKind;
-use crate::desktop::{
+use super::{
     debug_log, extract_query_value, impl_outcome, resolve_workspace, safe_folder_segment,
     sanitize_path_segment, Workspace,
 };
