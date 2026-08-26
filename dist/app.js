@@ -96,6 +96,7 @@ document.querySelectorAll(".nav-item").forEach((item) => {
     showView(view);
     if (view === "settings") {
       loadTargets();
+      loadSchedule();
       loadBlocklist();
     }
     if (view === "trash") loadTrash();
@@ -812,6 +813,39 @@ function updateTargetHint(data) {
     ? ""
     : "Noch kein Zielordner festgelegt — siehe Einstellungen.";
 }
+
+// ── Zeitplan ─────────────────────────────────────────────────────────────
+
+async function loadSchedule() {
+  try {
+    const data = await api("schedule");
+    $("schedule-interval").value = data.intervalHours;
+    $("schedule-paused").checked = data.paused;
+    $("schedule-quit").checked = data.quitOnClose;
+  } catch (error) {
+    setFeedback($("schedule-feedback"), error.message, "error");
+  }
+}
+
+async function saveSchedule() {
+  try {
+    const data = await post("schedule/save", {
+      intervalHours: Number($("schedule-interval").value) || undefined,
+      paused: $("schedule-paused").checked,
+      quitOnClose: $("schedule-quit").checked,
+    });
+    /* Das Backend begrenzt das Intervall auf 1 Stunde bis 7 Tage; den
+     * zurueckgegebenen Wert uebernehmen, damit das Feld nicht luegt. */
+    $("schedule-interval").value = data.intervalHours;
+    setFeedback($("schedule-feedback"), "Gespeichert.", "ok");
+  } catch (error) {
+    setFeedback($("schedule-feedback"), error.message, "error");
+  }
+}
+
+$("schedule-save").addEventListener("click", saveSchedule);
+$("schedule-paused").addEventListener("change", saveSchedule);
+$("schedule-quit").addEventListener("change", saveSchedule);
 
 // ── Blockliste ───────────────────────────────────────────────────────────
 

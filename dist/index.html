@@ -186,6 +186,29 @@
       </div>
 
       <div class="panel">
+        <p class="panel-label">Zeitplan</p>
+        <p class="hint">
+          Fero prüft von selbst nach. Das Fenster zu schließen beendet die App
+          nicht — sie läuft im Hintergrund weiter und ist über das Symbol in der
+          Menüleiste erreichbar.
+        </p>
+        <div class="row">
+          <label class="field" style="margin: 0">
+            <span>Alle … Stunden prüfen</span>
+            <input type="number" id="schedule-interval" class="input" min="1" max="168" />
+          </label>
+          <button class="action" id="schedule-save">Speichern</button>
+        </div>
+        <div class="row" style="margin-top: 10px">
+          <label><input type="checkbox" id="schedule-paused" /> Zeitplan pausiert</label>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="schedule-quit" /> Schließen beendet Fero wirklich</label>
+        </div>
+        <p class="feedback" id="schedule-feedback"></p>
+      </div>
+
+      <div class="panel">
         <p class="panel-label">Blockierte Quellen</p>
         <p class="hint">
           Hosts, von denen nicht abonniert wird. Mitgelieferte Einträge lassen
