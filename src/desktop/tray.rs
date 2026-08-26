@@ -63,7 +63,7 @@ pub(super) fn install(app: &AppHandle) -> Result<()> {
         .build(app)
         .map_err(|error| FeroError::AppStartup(error.to_string()))?;
 
-    start_timer(app.clone());
+    start_timer();
     Ok(())
 }
 
@@ -111,8 +111,12 @@ pub(super) fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
 }
 
 /// Runs the timer until the application exits.
-fn start_timer(app: AppHandle) {
-    std::thread::spawn(move || {
+///
+/// Deliberately takes no `AppHandle`: a scheduled check resolves its own
+/// workspace and reports through the job registry, so the timer needs nothing
+/// from the window layer.
+fn start_timer() {
+    std::thread::spawn(|| {
         // Give the first request a chance to set up the data directory before
         // the first check runs.
         std::thread::sleep(Duration::from_secs(30));
@@ -125,9 +129,6 @@ fn start_timer(app: AppHandle) {
             }
             std::thread::sleep(TICK);
         }
-        // `app` is captured so the handle stays alive with the thread.
-        #[allow(unreachable_code)]
-        drop(app);
     });
 }
 
