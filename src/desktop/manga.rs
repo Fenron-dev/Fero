@@ -1315,11 +1315,11 @@ fn record_delivery(
     );
     record.title = subscription.title.clone();
     record.status = if subscription.completed {
-        manifest::SeriesStatus::Completed
+        SeriesStatus::Completed
     } else if subscription.hiatus {
-        manifest::SeriesStatus::Hiatus
+        SeriesStatus::Hiatus
     } else {
-        manifest::SeriesStatus::Ongoing
+        SeriesStatus::Ongoing
     };
     record.last_check_unix = Some(unix_now());
     record.record_file(file_name, Some((index, index)), unix_now());
@@ -1343,6 +1343,7 @@ fn record_delivery(
 #[cfg(test)]
 mod tests {
     use super::*;
+use crate::core::status::SeriesStatus;
 
     fn subscription(title: &str) -> Subscription {
         Subscription::new("https://example.com/manga/x", "mangatown", title)

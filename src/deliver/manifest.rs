@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::status::SeriesStatus;
 use crate::deliver::targets::MediaKind;
 use crate::error::{FeroError, Result};
 
@@ -25,25 +26,6 @@ pub const MANIFEST_FILE: &str = "fero.info.json";
 /// Bumped only for changes older Fero versions cannot read; new optional fields
 /// do not need it.
 pub const SCHEMA_VERSION: u32 = 1;
-
-/// How the source describes the serial's life cycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SeriesStatus {
-    /// Still receiving new chapters.
-    Ongoing,
-    /// Finished upstream.
-    Completed,
-    /// Paused, no new chapters for a while.
-    Hiatus,
-    /// Abandoned by the translator or the author.
-    Dropped,
-    /// Licensed — fan translations often disappear afterwards.
-    Licensed,
-    /// Not determined yet.
-    #[default]
-    Unknown,
-}
 
 /// One file Fero delivered into the work folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,6 +4,7 @@
 //! a file rather than growing a shared one.
 
 use super::*;
+use crate::core::status::SeriesStatus;
 
 // Das Makro greift auf das private error-Feld zu und muss deshalb dort stehen,
 // wo die Strukturen definiert sind.
@@ -1473,11 +1474,11 @@ pub(super) fn record_delivery(
     );
     record.title = subscription.title.clone();
     record.status = if subscription.completed {
-        manifest::SeriesStatus::Completed
+        SeriesStatus::Completed
     } else if subscription.hiatus {
-        manifest::SeriesStatus::Hiatus
+        SeriesStatus::Hiatus
     } else {
-        manifest::SeriesStatus::Ongoing
+        SeriesStatus::Ongoing
     };
     record.last_check_unix = Some(unix_now());
     record.record_file(file_name, chapter_range, unix_now());
