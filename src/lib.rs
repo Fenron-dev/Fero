@@ -10,11 +10,11 @@ pub mod error;
 pub use api::anilist::AniListClient;
 pub use api::novel::{detect_source, ChapterRef, NovelInfo, NovelSource, PoliteClient};
 pub use core::epub::{write_epub, EpubChapter, EpubMeta};
+pub use core::status::{resolve as resolve_series_status, SeriesStatus};
 pub use core::webnovel::{
     delete_subscription, list_subscriptions, load_subscription, save_subscription, BlocklistEntry,
     KnownChapter, Subscription,
 };
-pub use core::status::{resolve as resolve_series_status, SeriesStatus};
 pub use deliver::manifest::{ChapterRecord, DeliveredFile, WorkManifest};
 pub use deliver::targets::{
     resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,

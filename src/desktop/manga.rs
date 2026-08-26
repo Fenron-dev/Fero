@@ -43,12 +43,12 @@ use super::{
 use crate::api::manga::{self, MangaChapterRef, MangaInfo};
 use crate::api::novel::{detect_image_media_type, PoliteClient};
 use crate::core::cbz::{write_cbz, CbzMeta, CbzPage};
-use crate::core::status::SeriesStatus;
 use crate::core::manga::{
     blocked_reason, delete_subscription, list_subscriptions, list_trashed_subscriptions,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
     save_subscription, subscription_id, trash_subscription, unix_now, KnownChapter, Subscription,
 };
+use crate::core::status::SeriesStatus;
 use crate::deliver::manifest;
 use crate::deliver::targets::MediaKind;
 impl_outcome!(

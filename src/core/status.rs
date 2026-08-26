@@ -110,7 +110,12 @@ mod tests {
 
     #[test]
     fn all_three_conditions_make_it_complete() {
-        let f = facts(OriginalStatus::Completed, Some(true), Some(false), Some(142));
+        let f = facts(
+            OriginalStatus::Completed,
+            Some(true),
+            Some(false),
+            Some(142),
+        );
         assert_eq!(resolve(&f, Some(142)), SeriesStatus::Completed);
     }
 
@@ -118,14 +123,24 @@ mod tests {
     /// the "complete" edition would be built without its ending.
     #[test]
     fn missing_chapters_prevent_completion() {
-        let f = facts(OriginalStatus::Completed, Some(true), Some(false), Some(142));
+        let f = facts(
+            OriginalStatus::Completed,
+            Some(true),
+            Some(false),
+            Some(142),
+        );
         assert_eq!(resolve(&f, Some(120)), SeriesStatus::Ongoing);
         assert_eq!(resolve(&f, None), SeriesStatus::Ongoing);
     }
 
     #[test]
     fn untranslated_original_is_not_complete() {
-        let f = facts(OriginalStatus::Completed, Some(false), Some(false), Some(10));
+        let f = facts(
+            OriginalStatus::Completed,
+            Some(false),
+            Some(false),
+            Some(10),
+        );
         assert_eq!(resolve(&f, Some(10)), SeriesStatus::Ongoing);
     }
 
