@@ -9,6 +9,7 @@ mod http;
 mod log;
 mod manga;
 mod routes;
+mod tray;
 mod webnovel;
 
 use browser::*;
@@ -56,6 +57,7 @@ const PROTOCOL_SCHEME: &str = "fero";
 // Die beiden Fenster-Antworten deklarieren ihr Outcome in browser.rs.
 impl_outcome!(
     AniListSearchResponse,
+    ScheduleResponse,
     SelectFolderResponse,
     OpenExternalResponse,
     TargetsResponse,
@@ -145,6 +147,23 @@ pub(crate) fn run() -> Result<()> {
                 });
             },
         )
+        .setup(|app| {
+            // The tray is what remains when the window is closed; without it a
+            // closed window would mean no more scheduled checks.
+            if let Err(error) = tray::install(app.handle()) {
+                debug_log(&format!("Tray konnte nicht angelegt werden: {error}"));
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            let quit_on_close = resolve_workspace(None)
+                .ok()
+                .map(|ws| load_schedule_settings(&ws.store).quit_on_close)
+                .unwrap_or(false);
+            if !quit_on_close {
+                tray::handle_window_event(window, event);
+            }
+        })
         .run(tauri::generate_context!())
         .map_err(|error| FeroError::AppStartup(error.to_string()))
 }
@@ -531,6 +550,121 @@ impl Workspace {
     ) -> Option<PathBuf> {
         self.delivery_parent(kind, subscription).ok()
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduleResponse {
+    interval_hours: u64,
+    quit_on_close: bool,
+    paused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn build_schedule_response() -> ScheduleResponse {
+    let settings = resolve_workspace(None)
+        .ok()
+        .map(|ws| load_schedule_settings(&ws.store))
+        .unwrap_or_default();
+    ScheduleResponse {
+        interval_hours: settings.interval_hours,
+        quit_on_close: settings.quit_on_close,
+        paused: tray::is_paused(),
+        error: None,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveScheduleRequest {
+    #[serde(default)]
+    interval_hours: Option<u64>,
+    #[serde(default)]
+    quit_on_close: Option<bool>,
+    #[serde(default)]
+    paused: Option<bool>,
+}
+
+fn build_save_schedule_response(body: &[u8]) -> ScheduleResponse {
+    let req: SaveScheduleRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => {
+            return ScheduleResponse {
+                error: Some(format!("Ungültige Anfrage: {error}")),
+                ..build_schedule_response()
+            }
+        }
+    };
+    let Ok(ws) = resolve_workspace(None) else {
+        return ScheduleResponse {
+            error: Some("Kein nutzbarer Datenordner eingerichtet.".to_string()),
+            ..build_schedule_response()
+        };
+    };
+
+    let mut settings = load_schedule_settings(&ws.store);
+    if let Some(hours) = req.interval_hours {
+        // An interval below an hour would hammer the sources; above a week it
+        // stops being a schedule.
+        settings.interval_hours = hours.clamp(1, 24 * 7);
+    }
+    if let Some(quit) = req.quit_on_close {
+        settings.quit_on_close = quit;
+    }
+    if let Some(paused) = req.paused {
+        tray::set_paused(paused);
+    }
+
+    if let Err(error) = save_schedule_settings(&ws.store, &settings) {
+        return ScheduleResponse {
+            error: Some(error.to_string()),
+            ..build_schedule_response()
+        };
+    }
+    build_schedule_response()
+}
+
+/// File holding the schedule settings, inside Fero's data directory.
+const SCHEDULE_SETTINGS_FILE: &str = "schedule.json";
+
+/// How often Fero checks on its own, and what closing the window means.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScheduleSettings {
+    /// Hours between automatic checks.
+    pub(crate) interval_hours: u64,
+    /// Whether closing the window quits instead of hiding to the tray.
+    #[serde(default)]
+    pub(crate) quit_on_close: bool,
+}
+
+impl Default for ScheduleSettings {
+    fn default() -> Self {
+        Self {
+            interval_hours: 6,
+            quit_on_close: false,
+        }
+    }
+}
+
+/// Loads the schedule settings; anything unreadable means "use the defaults".
+pub(crate) fn load_schedule_settings(store: &Path) -> ScheduleSettings {
+    fs::read_to_string(store.join(SCHEDULE_SETTINGS_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Persists the schedule settings.
+///
+/// # Errors
+/// [`FeroError::Io`] when the file cannot be written.
+pub(crate) fn save_schedule_settings(store: &Path, settings: &ScheduleSettings) -> Result<()> {
+    let body = serde_json::to_string_pretty(settings)
+        .map_err(|error| FeroError::Serialization(error.to_string()))?;
+    fs::create_dir_all(store).map_err(FeroError::from)?;
+    fs::write(store.join(SCHEDULE_SETTINGS_FILE), body).map_err(FeroError::from)
 }
 
 /// File holding the configured download targets, inside Fero's data directory.

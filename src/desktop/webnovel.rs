@@ -806,11 +806,23 @@ pub(super) fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckRespons
         goodreads_mode: GoodreadsMode::parse(req.goodreads_mode.as_deref()),
         manual: req.manual,
     };
-    let thread_job_id = job_id.clone();
+    spawn_check(ws, options, job_id.clone());
+
+    WebnovelCheckResponse {
+        job_id: Some(job_id),
+        error: None,
+    }
+}
+
+/// Starts a check on a worker thread and records its outcome in the job.
+///
+/// Shared with the scheduler: a timed run must behave exactly like a clicked
+/// one, including the guard against overlapping runs.
+fn spawn_check(ws: Workspace, options: WebnovelCheckOptions, job_id: String) {
     std::thread::spawn(move || {
         let _active = WebnovelCheckActiveGuard;
-        let outcome = run_webnovel_check(&ws, &options, &thread_job_id);
-        update_webnovel_job(&thread_job_id, |status| match &outcome {
+        let outcome = run_webnovel_check(&ws, &options, &job_id);
+        update_webnovel_job(&job_id, |status| match &outcome {
             Ok(message) => {
                 status.state = "done".to_string();
                 status.message = Some(message.clone());
@@ -821,11 +833,46 @@ pub(super) fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckRespons
             }
         });
     });
+}
 
-    WebnovelCheckResponse {
-        job_id: Some(job_id),
-        error: None,
+/// Starts a scheduled check of every due subscription.
+///
+/// Returns `false` when a run is already in flight — the timer then simply
+/// skips this tick rather than queueing, because a check that takes longer than
+/// the interval would otherwise pile up runs behind each other.
+pub(super) fn start_scheduled_check() -> bool {
+    let Ok(ws) = resolve_workspace(None) else {
+        return false;
+    };
+    if WEBNOVEL_CHECK_ACTIVE
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return false;
     }
+
+    let job_id = format!(
+        "job-{}-{}",
+        unix_now(),
+        WEBNOVEL_JOB_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    if let Ok(mut jobs) = WEBNOVEL_JOBS.lock() {
+        prune_webnovel_jobs(&mut jobs);
+        jobs.insert(job_id.clone(), WebnovelJobStatus::running());
+    }
+    spawn_check(
+        ws,
+        WebnovelCheckOptions {
+            only_id: None,
+            build_complete: true,
+            build_batch: true,
+            delay_ms: None,
+            goodreads_mode: GoodreadsMode::Fill,
+            manual: false,
+        },
+        job_id,
+    );
+    true
 }
 
 #[derive(Serialize)]

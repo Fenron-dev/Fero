@@ -35,6 +35,11 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             &build_save_targets_response(request.body()),
             StatusCode::BAD_REQUEST,
         ),
+        "/api/schedule" => json_outcome(&build_schedule_response(), StatusCode::INTERNAL_SERVER_ERROR),
+        "/api/schedule/save" => json_outcome(
+            &build_save_schedule_response(request.body()),
+            StatusCode::BAD_REQUEST,
+        ),
         "/api/anilist-search" => json_outcome(
             &build_anilist_search_response(request.uri().query()),
             StatusCode::BAD_REQUEST,
