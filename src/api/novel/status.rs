@@ -229,3 +229,19 @@ mod tests {
         assert_eq!(facts.latest_chapter, Some(142));
     }
 }
+
+/// Fetches a NovelUpdates series page and reads its life-cycle facts.
+///
+/// Goes through the polite client like every other request, so the status
+/// check shares the per-host rate limit with chapter downloads instead of
+/// hammering the site alongside them.
+///
+/// # Errors
+/// [`FeroError::ExternalApi`] when the page cannot be fetched.
+pub fn fetch_status(
+    client: &super::PoliteClient,
+    url: &str,
+) -> crate::error::Result<SeriesStatusFacts> {
+    let (_, body) = client.get_text(url)?;
+    Ok(parse_status(&body))
+}

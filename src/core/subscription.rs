@@ -34,6 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::status::SeriesStatus;
 use crate::error::{FeroError, Result};
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,25 @@ pub struct Subscription {
     /// All chapters ever seen in the ToC, in first-seen order.
     #[serde(default)]
     pub known_chapters: Vec<KnownChapter>,
+    /// Life-cycle status as last determined from the status source.
+    ///
+    /// Separate from `completed`/`hiatus`, which the user sets by hand: this
+    /// one is what the source said, and the two must not overwrite each other.
+    #[serde(default, skip_serializing_if = "is_unknown_status")]
+    pub series_status: SeriesStatus,
+    /// Whether the translation is finished, when the source says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation_done: Option<bool>,
+    /// UNIX timestamp of the last status check — drives the weekly cadence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_checked_at: Option<u64>,
+    /// Page the status is read from, usually the NovelUpdates series page.
+    ///
+    /// Set automatically when the subscription itself points at NovelUpdates;
+    /// otherwise the user supplies it, because only they know which entry
+    /// belongs to their translation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_source_url: Option<String>,
     /// UNIX timestamp of the last completed update check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_check_unix: Option<u64>,
@@ -197,6 +217,10 @@ impl Subscription {
             completed: false,
             hiatus: false,
             enabled: true,
+            series_status: SeriesStatus::Unknown,
+            translation_done: None,
+            status_checked_at: None,
+            status_source_url: None,
             known_chapters: Vec::new(),
             last_check_unix: None,
             last_error: None,
@@ -246,6 +270,12 @@ pub fn subscription_id(url: &str) -> String {
 
 /// Length of a subscription id in hex characters (FNV-1a-64).
 const SUBSCRIPTION_ID_LEN: usize = 16;
+
+/// Keeps `Unknown` out of the stored JSON — it is the default and carries no
+/// information.
+fn is_unknown_status(status: &SeriesStatus) -> bool {
+    *status == SeriesStatus::Unknown
+}
 
 /// Whether a string is a well-formed subscription id.
 ///

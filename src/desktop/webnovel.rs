@@ -4,7 +4,8 @@
 //! a file rather than growing a shared one.
 
 use super::*;
-use crate::core::status::SeriesStatus;
+use crate::api::novel::status as novel_status;
+use crate::core::status::{self, SeriesStatus};
 
 // Das Makro greift auf das private error-Feld zu und muss deshalb dort stehen,
 // wo die Strukturen definiert sind.
@@ -171,6 +172,13 @@ struct WebnovelSubscriptionSummary {
     /// Delivery target set for this subscription alone, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     target_dir: Option<String>,
+    /// Life-cycle status as last read from the status source.
+    series_status: SeriesStatus,
+    /// Whether that status is one the user should be told about unprompted.
+    needs_attention: bool,
+    /// UNIX timestamp of the last status check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_checked_at: Option<u64>,
     /// Whether a cached cover exists in the work folder.
     ///
     /// Only a flag: with per-work targets there is no library-relative path to
@@ -207,6 +215,9 @@ impl WebnovelSubscriptionSummary {
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
             target_dir: subscription.target_dir.clone(),
+            series_status: subscription.series_status,
+            needs_attention: subscription.series_status.needs_attention(),
+            status_checked_at: subscription.status_checked_at,
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
@@ -928,6 +939,61 @@ fn run_webnovel_check(
 }
 
 /// Checks one subscription: refresh ToC, download pending chapters, build EPUBs.
+/// Refreshes the life-cycle status when it is stale, at most weekly.
+///
+/// Best effort and silent: a status is a nice-to-have, and a NovelUpdates that
+/// is behind Cloudflare today must not stop the chapters from being fetched.
+/// The timestamp is written even on failure, so a permanently unreachable
+/// source is retried weekly rather than on every single run.
+fn refresh_series_status(client: &PoliteClient, subscription: &mut Subscription) {
+    let Some(url) = status_source_for(subscription) else {
+        return;
+    };
+    if !status::is_due(subscription.status_checked_at, unix_now()) {
+        return;
+    }
+
+    subscription.status_checked_at = Some(unix_now());
+    let facts = match novel_status::fetch_status(client, &url) {
+        Ok(facts) => facts,
+        Err(error) => {
+            debug_log(&format!("status: {} — {error}", subscription.title));
+            return;
+        }
+    };
+
+    let local_last = subscription
+        .known_chapters
+        .iter()
+        .filter(|chapter| chapter.downloaded_at_unix.is_some())
+        .map(|chapter| chapter.index)
+        .max();
+    let resolved = status::resolve(&facts, local_last);
+    if resolved != subscription.series_status {
+        debug_log(&format!(
+            "status: '{}' {:?} -> {:?}",
+            subscription.title, subscription.series_status, resolved
+        ));
+    }
+    subscription.series_status = resolved;
+    subscription.translation_done = facts.fully_translated;
+    subscription.status_source_url = Some(url);
+}
+
+/// The page a subscription's status is read from.
+///
+/// A NovelUpdates subscription is its own status source; for everything else
+/// the user has to supply the link, because only they know which NU entry
+/// belongs to the translation they are following.
+fn status_source_for(subscription: &Subscription) -> Option<String> {
+    if let Some(url) = subscription.status_source_url.as_deref() {
+        return Some(url.to_string());
+    }
+    host_of(&subscription.url)
+        .filter(|host| host.ends_with("novelupdates.com"))
+        .map(|_| subscription.url.clone())
+}
+
 fn check_one_subscription(
     ws: &Workspace,
     client: &PoliteClient,
@@ -938,6 +1004,7 @@ fn check_one_subscription(
     if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
         return Err(FeroError::ExternalApi(reason));
     }
+    refresh_series_status(client, subscription);
     let source = detect_source(&subscription.url);
     debug_log(&format!(
         "check: '{}' host-routed={} source={}",
@@ -1473,12 +1540,13 @@ pub(super) fn record_delivery(
         &subscription.title,
     );
     record.title = subscription.title.clone();
-    record.status = if subscription.completed {
-        SeriesStatus::Completed
-    } else if subscription.hiatus {
-        SeriesStatus::Hiatus
-    } else {
-        SeriesStatus::Ongoing
+    // Der ermittelte Status hat Vorrang; die Handschalter greifen nur, solange
+    // noch keine Quelle befragt wurde.
+    record.status = match subscription.series_status {
+        SeriesStatus::Unknown if subscription.completed => SeriesStatus::Completed,
+        SeriesStatus::Unknown if subscription.hiatus => SeriesStatus::Hiatus,
+        SeriesStatus::Unknown => SeriesStatus::Ongoing,
+        known => known,
     };
     record.last_check_unix = Some(unix_now());
     record.record_file(file_name, chapter_range, unix_now());

@@ -52,6 +52,25 @@ impl SeriesStatus {
     }
 }
 
+/// How long a status stays fresh.
+///
+/// A serial's life cycle changes on the scale of months, so a weekly look is
+/// generous. The point is not freshness but restraint: a hundred subscriptions
+/// checking on every run would be a hundred extra requests for information that
+/// almost never moved.
+pub const STATUS_MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Whether a status check is due.
+///
+/// Never checked before counts as due. `now` is passed in rather than read from
+/// the clock so the decision stays testable.
+pub fn is_due(checked_at: Option<u64>, now: u64) -> bool {
+    match checked_at {
+        None => true,
+        Some(then) => now.saturating_sub(then) >= STATUS_MAX_AGE_SECS,
+    }
+}
+
 /// Decides the status of a serial from the source facts and what is on disk.
 ///
 /// "Completed" needs all three: the original finished, the translation
@@ -182,6 +201,20 @@ mod tests {
         assert!(!SeriesStatus::Dropped.is_settled());
         assert!(!SeriesStatus::Licensed.is_settled());
         assert!(!SeriesStatus::Hiatus.is_settled());
+    }
+
+    #[test]
+    fn a_status_is_due_after_a_week() {
+        let now = 10 * STATUS_MAX_AGE_SECS;
+        assert!(is_due(None, now), "never checked is always due");
+        assert!(is_due(Some(now - STATUS_MAX_AGE_SECS), now));
+        assert!(!is_due(Some(now - 60), now));
+    }
+
+    /// A clock that jumped backwards must not make everything due at once.
+    #[test]
+    fn a_timestamp_from_the_future_is_not_due() {
+        assert!(!is_due(Some(1_000), 500));
     }
 
     #[test]
