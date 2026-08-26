@@ -23,6 +23,7 @@ pub mod novelight;
 pub mod novelphoenix;
 pub mod novelupdates;
 pub mod royalroad;
+pub mod status;
 pub mod wordpress;
 
 use std::collections::HashMap;
