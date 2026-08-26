@@ -5,6 +5,17 @@
 
 use super::*;
 
+// Das Makro greift auf das private error-Feld zu und muss deshalb dort stehen,
+// wo die Strukturen definiert sind.
+impl_outcome!(
+    WebnovelListResponse,
+    WebnovelSubscribeResponse,
+    WebnovelTrashResponse,
+    WebnovelCheckResponse,
+    WebnovelJobResponse,
+    WebnovelBlocklistResponse,
+);
+
 // ---------------------------------------------------------------------------
 // Webnovel subscriptions
 // ---------------------------------------------------------------------------
@@ -56,8 +67,11 @@ struct WebnovelJobStatus {
     /// Chapters downloaded so far across the whole job.
     downloaded: usize,
     /// Final summary or error message once the job is terminal.
+    ///
+    /// Visible to the browser module, which reports the fetch state into the
+    /// running job so the UI can show what the foreign window is doing.
     #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
+    pub(super) message: Option<String>,
     /// When the job reached a terminal state — drives cleanup of the registry.
     #[serde(skip)]
     finished_at_unix: Option<u64>,

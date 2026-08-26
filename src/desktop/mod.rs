@@ -58,14 +58,8 @@ impl_outcome!(
     AniListSearchResponse,
     SelectFolderResponse,
     OpenExternalResponse,
-    WebnovelListResponse,
     TargetsResponse,
-    WebnovelSubscribeResponse,
     SimpleResponse,
-    WebnovelTrashResponse,
-    WebnovelCheckResponse,
-    WebnovelJobResponse,
-    WebnovelBlocklistResponse,
 );
 const LEGACY_SYSTEM_DIR: &str = ".mediashelf";
 /// In-vault trash folder; deleted files move here (reversible) preserving
