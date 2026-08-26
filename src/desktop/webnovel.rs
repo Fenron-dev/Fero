@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::api::novel::status as novel_status;
+use crate::core::batching;
 use crate::core::status::{self, SeriesStatus};
 
 // Das Makro greift auf das private error-Feld zu und muss deshalb dort stehen,
@@ -1225,8 +1226,8 @@ fn check_one_subscription(
     }
 
     // Build EPUBs from whatever is cached — also after a partial run.
-    if !downloaded_indices.is_empty() && options.build_batch && !subscription.completed {
-        build_batch_epub(&novel_dir, &cache_dir, subscription, &downloaded_indices)?;
+    if options.build_batch && (!downloaded_indices.is_empty() || repaired_chapters > 0) {
+        build_blocks(&novel_dir, &cache_dir, subscription)?;
     }
     // The complete EPUB is also rebuilt when it is missing entirely or when a
     // cover arrived after the last build (covers embed into the EPUB itself).
@@ -1475,38 +1476,71 @@ fn load_cached_chapters(cache_dir: &Path, indices: &[u32]) -> Result<Vec<EpubCha
 ///
 /// Batch files are never rewritten afterwards, so reading progress in them
 /// survives future complete-EPUB rebuilds.
-fn build_batch_epub(
+/// Writes the block files a serial should have.
+///
+/// Blocks that already exist are left alone — that is the whole point: a
+/// delivered file never changes, so a reading position inside it survives every
+/// later run. Only the running `[WIP]` file is rewritten.
+fn build_blocks(
     novel_dir: &Path,
     cache_dir: &Path,
     subscription: &Subscription,
-    indices: &[u32],
-) -> Result<()> {
-    let min = indices.iter().min().copied().unwrap_or(0);
-    let max = indices.iter().max().copied().unwrap_or(0);
+) -> Result<usize> {
     let safe_title = novel_folder_name(subscription);
-    let file_name = if min == max {
-        format!("{safe_title} - Kapitel {min:04}.epub")
-    } else {
-        format!("{safe_title} - Kapitel {min:04}-{max:04}.epub")
+    let downloaded: Vec<u32> = subscription
+        .known_chapters
+        .iter()
+        .filter(|chapter| chapter.downloaded_at_unix.is_some())
+        .map(|chapter| chapter.index)
+        .collect();
+
+    let planned = batching::plan(&safe_title, &downloaded, subscription.batch_size());
+    let mut written = 0usize;
+    let mut stale_wip: Vec<String> = existing_wip_files(novel_dir);
+
+    for file in &planned {
+        stale_wip.retain(|name| name != &file.name);
+        let path = novel_dir.join(&file.name);
+        if path.exists() && !file.is_rewritable() {
+            continue;
+        }
+
+        let chapters = load_cached_chapters(cache_dir, &file.chapters)?;
+        let first = file.chapters.first().copied().unwrap_or(0);
+        let last = file.chapters.last().copied().unwrap_or(0);
+        let meta = EpubMeta {
+            title: format!("{} – Kapitel {first}–{last}", subscription.title),
+            author: subscription.author.clone(),
+            language: "en".to_string(),
+            identifier: format!("{}#block-{first}-{last}", subscription.url),
+            description: subscription.description.clone(),
+            cover: load_novel_cover(novel_dir),
+        };
+        write_epub(&path, &meta, &chapters)?;
+        record_delivery(novel_dir, subscription, &file.name, Some((first, last)))?;
+        written += 1;
+    }
+
+    // A WIP file whose window filled up has been replaced by a numbered block;
+    // leaving the old one behind would deliver the same chapters twice.
+    for name in stale_wip {
+        let _ = fs::remove_file(novel_dir.join(&name));
+        debug_log(&format!("batch: abgeloeste Datei entfernt — {name}"));
+    }
+
+    Ok(written)
+}
+
+/// File names in the work folder that are marked as a running edge.
+fn existing_wip_files(novel_dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(novel_dir) else {
+        return Vec::new();
     };
-
-    let chapters = load_cached_chapters(cache_dir, indices)?;
-
-    let meta = EpubMeta {
-        title: if min == max {
-            format!("{} – Kapitel {min}", subscription.title)
-        } else {
-            format!("{} – Kapitel {min}–{max}", subscription.title)
-        },
-        author: subscription.author.clone(),
-        language: "en".to_string(),
-        identifier: format!("{}#batch-{min}-{max}", subscription.url),
-        description: subscription.description.clone(),
-        cover: load_novel_cover(novel_dir),
-    };
-    write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
-
-    record_delivery(novel_dir, subscription, &file_name, Some((min, max)))
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.contains("[WIP]") && name.ends_with(".epub"))
+        .collect()
 }
 
 /// Rebuilds the complete EPUB from every cached chapter.

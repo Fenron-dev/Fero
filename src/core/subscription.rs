@@ -126,6 +126,12 @@ pub struct Subscription {
     /// UNIX timestamp of the last status check — drives the weekly cadence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_checked_at: Option<u64>,
+    /// Chapters per block, when this serial should differ from the default.
+    ///
+    /// A serial with very short chapters reads better in larger blocks; one
+    /// with novella-length ones in smaller. `None` means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u32>,
     /// Page the status is read from, usually the NovelUpdates series page.
     ///
     /// Set automatically when the subscription itself points at NovelUpdates;
@@ -220,6 +226,7 @@ impl Subscription {
             series_status: SeriesStatus::Unknown,
             translation_done: None,
             status_checked_at: None,
+            batch_size: None,
             status_source_url: None,
             known_chapters: Vec::new(),
             last_check_unix: None,
@@ -270,6 +277,13 @@ pub fn subscription_id(url: &str) -> String {
 
 /// Length of a subscription id in hex characters (FNV-1a-64).
 const SUBSCRIPTION_ID_LEN: usize = 16;
+
+impl Subscription {
+    /// Chapters per block for this serial.
+    pub fn batch_size(&self) -> u32 {
+        self.batch_size.unwrap_or(crate::core::batching::DEFAULT_BATCH_SIZE)
+    }
+}
 
 /// Keeps `Unknown` out of the stored JSON — it is the default and carries no
 /// information.
