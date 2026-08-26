@@ -55,7 +55,7 @@ static WEBNOVEL_JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Progress snapshot of one check job, polled by the frontend.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelJobStatus {
+pub(super) struct WebnovelJobStatus {
     /// `running`, `done`, or `failed`.
     state: String,
     /// Title of the subscription currently being processed.
