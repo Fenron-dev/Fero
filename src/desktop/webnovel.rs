@@ -1108,7 +1108,11 @@ fn check_one_subscription(
     fs::create_dir_all(&cache_dir).map_err(FeroError::from)?;
 
     // Fetch the cover once; failures are non-fatal (text matters more).
-    let cover_added = ensure_novel_cover(client, subscription, &novel_dir);
+    //
+    // The return value used to trigger a rebuild of the complete EPUB, because
+    // the cover is embedded. With immutable blocks that is no longer wanted: a
+    // late cover is not worth reshuffling every reading position for.
+    ensure_novel_cover(client, subscription, &novel_dir);
 
     let pending: Vec<usize> = subscription
         .known_chapters
@@ -1229,22 +1233,11 @@ fn check_one_subscription(
     if options.build_batch && (!downloaded_indices.is_empty() || repaired_chapters > 0) {
         build_blocks(&novel_dir, &cache_dir, subscription)?;
     }
-    // The complete EPUB is also rebuilt when it is missing entirely or when a
-    // cover arrived after the last build (covers embed into the EPUB itself).
-    let safe_title = novel_folder_name(subscription);
-    let complete_file = format!("{safe_title}.epub");
-    let complete_missing = !novel_dir.join(&complete_file).exists();
-    if options.build_complete
-        && (!downloaded_indices.is_empty()
-            || repaired_chapters > 0
-            || cover_added
-            || complete_missing)
-    {
-        build_complete_epub(&novel_dir, &cache_dir, subscription)?;
-    } else if !complete_missing {
-        // No rebuild needed, but enrichment may have added metadata — keep the
-        // manifest in step with the subscription.
-        record_delivery(&novel_dir, subscription, &complete_file, None)?;
+    // The complete edition is built once, when the serial is actually finished
+    // — either because the status source says so or because the user marked it.
+    let finished = subscription.series_status.is_settled() || subscription.completed;
+    if options.build_complete && finished {
+        build_complete_edition(&novel_dir, &cache_dir, subscription)?;
     }
 
     if skipped_chapters > 0 {
@@ -1539,12 +1532,25 @@ fn existing_wip_files(novel_dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Rebuilds the complete EPUB from every cached chapter.
-fn build_complete_epub(
+/// Builds the single-file edition, once, for a serial that is finished.
+///
+/// Deliberately not rebuilt on every run: a file that changes shifts every
+/// reading position inside it. While a serial is still growing, the blocks are
+/// the deliverable; the complete edition is what it becomes when it is done.
+///
+/// The blocks are left in place — someone reading in block three should not
+/// find it gone the week the serial finished.
+fn build_complete_edition(
     novel_dir: &Path,
     cache_dir: &Path,
     subscription: &Subscription,
-) -> Result<()> {
+) -> Result<bool> {
+    let safe_title = novel_folder_name(subscription);
+    let file_name = batching::complete_edition_name(&safe_title);
+    if novel_dir.join(&file_name).exists() {
+        return Ok(false);
+    }
+
     let indices: Vec<u32> = subscription
         .known_chapters
         .iter()
@@ -1552,13 +1558,10 @@ fn build_complete_epub(
         .map(|chapter| chapter.index)
         .collect();
     if indices.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let chapters = load_cached_chapters(cache_dir, &indices)?;
-
-    let safe_title = novel_folder_name(subscription);
-    let file_name = format!("{safe_title}.epub");
     let meta = EpubMeta {
         title: subscription.title.clone(),
         author: subscription.author.clone(),
@@ -1568,8 +1571,9 @@ fn build_complete_epub(
         cover: load_novel_cover(novel_dir),
     };
     write_epub(&novel_dir.join(&file_name), &meta, &chapters)?;
-
-    record_delivery(novel_dir, subscription, &file_name, None)
+    record_delivery(novel_dir, subscription, &file_name, None)?;
+    debug_log(&format!("Gesamtausgabe erzeugt: {file_name}"));
+    Ok(true)
 }
 
 /// Records a delivered file in the work folder's `fero.info.json`.
