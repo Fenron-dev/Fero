@@ -568,16 +568,16 @@ pub(super) fn build_webnovel_login_status_response(
     }
 }
 
-pub(super) fn build_webnovel_logout_response(body: &[u8]) -> WebnovelSimpleResponse {
+pub(super) fn build_webnovel_logout_response(body: &[u8]) -> SimpleResponse {
     let req: WebnovelLoginRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
-        Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
     let host = host_of(&req.host).unwrap_or_else(|| req.host.trim().to_lowercase());
     drop_session(&host);
     set_login_state(&host, "unknown");
     debug_log(&format!("logout: {host} — Sitzung entfernt"));
-    WebnovelSimpleResponse::ok()
+    SimpleResponse::ok()
 }
 
 // ---------------------------------------------------------------------------

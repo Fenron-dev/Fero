@@ -12,6 +12,7 @@ mod routes;
 mod webnovel;
 
 use browser::*;
+use webnovel::*;
 pub(crate) use http::{extract_query_value, impl_outcome, json_response, Outcome};
 pub(crate) use log::debug_log;
 use log::debug_log_path;
@@ -60,7 +61,7 @@ impl_outcome!(
     WebnovelListResponse,
     TargetsResponse,
     WebnovelSubscribeResponse,
-    WebnovelSimpleResponse,
+    SimpleResponse,
     WebnovelTrashResponse,
     WebnovelCheckResponse,
     WebnovelJobResponse,
@@ -465,6 +466,281 @@ fn is_authorized_root(root: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace, delivery targets and shared response shapes
+// ---------------------------------------------------------------------------
+
+/// Fero's own storage plus the library it delivers into.
+///
+/// The two are deliberately separate. Subscriptions, blocklists and caches are
+/// Fero's bookkeeping and live in Fero's data directory; only finished works go
+/// into the library. Writing bookkeeping into the library would put Fero's
+/// files inside someone else's collection.
+pub(crate) struct Workspace {
+    /// Fero's data directory — subscriptions, blocklist, caches.
+    pub(crate) store: PathBuf,
+    /// Configured download targets per media kind, plus the shared fallback.
+    pub(crate) targets: TargetSettings,
+}
+
+impl Workspace {
+    /// Directory the work folder for `subscription` belongs in.
+    ///
+    /// Walks the target chain: the subscription's own target, then the media
+    /// kind's default, then the confirmed fallback. Fallible on purpose — if
+    /// nothing is configured, or a configured target is offline, the work must
+    /// not silently land somewhere else.
+    ///
+    /// # Errors
+    /// [`FeroError::InvalidTarget`] carrying the reason to show the user.
+    pub(crate) fn delivery_parent(
+        &self,
+        kind: MediaKind,
+        subscription: &Subscription,
+    ) -> Result<PathBuf> {
+        let own = subscription.target_dir.as_deref().map(Path::new);
+        match resolve_target(own, kind, &self.targets, &self.store) {
+            TargetResolution::Resolved { parent, .. } => Ok(parent),
+            TargetResolution::NeedsChoice { reason, .. } => Err(FeroError::InvalidTarget(reason)),
+        }
+    }
+}
+
+impl Workspace {
+    /// Chapter cache for one subscription, inside Fero's data directory.
+    ///
+    /// Used to live in the delivered work folder. That put Fero's scratch data
+    /// into the library and made every rebuild depend on the target being
+    /// online — the cache belongs to Fero, not to the collection.
+    ///
+    /// # Errors
+    /// [`FeroError::InvalidProperty`] if the id is not a well-formed
+    /// subscription id; it becomes a directory name.
+    pub(crate) fn chapter_cache(&self, subscription_id: &str) -> Result<PathBuf> {
+        if !is_valid_subscription_id(subscription_id) {
+            return Err(FeroError::InvalidProperty(format!(
+                "invalid subscription id: {subscription_id}"
+            )));
+        }
+        Ok(self.store.join("cache").join(subscription_id))
+    }
+
+    /// Delivery parent, or `None` when no usable target is configured.
+    ///
+    /// For read-only views: a subscription without a target is still worth
+    /// listing, just without the things that live in its folder. Deliberately
+    /// returns the *parent* — how a work folder is named is the business of the
+    /// media kind's module, not of the workspace.
+    pub(crate) fn delivery_parent_opt(
+        &self,
+        kind: MediaKind,
+        subscription: &Subscription,
+    ) -> Option<PathBuf> {
+        self.delivery_parent(kind, subscription).ok()
+    }
+}
+
+/// File holding the configured download targets, inside Fero's data directory.
+const TARGET_SETTINGS_FILE: &str = "targets.json";
+
+/// Loads the configured targets; missing or unreadable settings mean "nothing
+/// configured yet", which the target chain reports as a choice for the user.
+pub(crate) fn load_target_settings(store: &Path) -> TargetSettings {
+    fs::read_to_string(store.join(TARGET_SETTINGS_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// # Errors
+/// [`FeroError::Io`] when the file cannot be written.
+pub(crate) fn save_target_settings(store: &Path, settings: &TargetSettings) -> Result<()> {
+    let body = serde_json::to_string_pretty(settings)
+        .map_err(|error| FeroError::Serialization(error.to_string()))?;
+    fs::create_dir_all(store).map_err(FeroError::from)?;
+    fs::write(store.join(TARGET_SETTINGS_FILE), body).map_err(FeroError::from)
+}
+
+/// Resolves both locations, or reports which one is missing.
+pub(crate) fn resolve_workspace(
+    root_override: Option<&str>,
+) -> std::result::Result<Workspace, String> {
+    // The library root is deliberately not part of this any more: with a target
+    // per media kind (and per subscription) there is no single root to resolve.
+    // Where a work goes is decided per work, by the target chain.
+    let _ = root_override;
+    let store = match resolve_data_dir() {
+        DataDir::Portable(path) | DataDir::Chosen(path) => path,
+        DataDir::NeedsSetup { reason, .. } => return Err(reason),
+    };
+    let targets = load_target_settings(&store);
+    Ok(Workspace { store, targets })
+}
+
+/// Generic ok/error answer, shared by every endpoint that has nothing else to
+/// report. Lives here rather than with one media kind because all of them —
+/// and the browser window — answer with it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SimpleResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl SimpleResponse {
+    fn ok() -> Self {
+        Self {
+            ok: true,
+            error: None,
+        }
+    }
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(message.into()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetKindView {
+    id: &'static str,
+    label: &'static str,
+    folder_segment: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    directory: Option<String>,
+}
+
+/// What the settings page needs to render the target configuration.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetsResponse {
+    /// Fero's data directory, or `None` while setup is pending.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_dir: Option<String>,
+    /// Why the data directory is unusable, when it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_dir_problem: Option<String>,
+    /// Whether the data directory sits next to the application.
+    portable: bool,
+    kinds: Vec<TargetKindView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn build_targets_response() -> TargetsResponse {
+    let data = resolve_data_dir();
+    let (data_dir, data_dir_problem, portable) = match &data {
+        DataDir::Portable(path) => (Some(path.display().to_string()), None, true),
+        DataDir::Chosen(path) => (Some(path.display().to_string()), None, false),
+        DataDir::NeedsSetup { reason, .. } => (None, Some(reason.clone()), false),
+    };
+    let settings = data.path().map(load_target_settings).unwrap_or_default();
+
+    TargetsResponse {
+        data_dir,
+        data_dir_problem,
+        portable,
+        kinds: MediaKind::ALL
+            .iter()
+            .map(|kind| TargetKindView {
+                id: kind.id(),
+                label: kind.label(),
+                folder_segment: kind.folder_segment(),
+                directory: settings
+                    .default_for(*kind)
+                    .map(|dir| dir.display().to_string()),
+            })
+            .collect(),
+        fallback: settings.fallback.clone(),
+        error: None,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTargetsRequest {
+    /// Media kind id, or `null` to address the shared fallback.
+    #[serde(default)]
+    kind: Option<String>,
+    /// New directory, or `null` to clear the entry.
+    #[serde(default)]
+    directory: Option<String>,
+}
+
+fn build_save_targets_response(body: &[u8]) -> TargetsResponse {
+    let req: SaveTargetsRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => {
+            return TargetsResponse {
+                error: Some(format!("Ungültige Anfrage: {error}")),
+                ..build_targets_response()
+            }
+        }
+    };
+    let Some(store) = resolve_data_dir().path().map(Path::to_path_buf) else {
+        return TargetsResponse {
+            error: Some("Kein nutzbarer Datenordner eingerichtet.".to_string()),
+            ..build_targets_response()
+        };
+    };
+
+    let mut settings = load_target_settings(&store);
+    match req.kind.as_deref() {
+        None => settings.fallback = req.directory.clone(),
+        Some(id) => match MediaKind::from_id(id) {
+            Some(kind) => settings.set_default(kind, req.directory.as_deref().map(Path::new)),
+            None => {
+                return TargetsResponse {
+                    error: Some(format!("Unbekannter Medientyp: {id}")),
+                    ..build_targets_response()
+                }
+            }
+        },
+    }
+
+    if let Err(error) = save_target_settings(&store, &settings) {
+        return TargetsResponse {
+            error: Some(error.to_string()),
+            ..build_targets_response()
+        };
+    }
+    build_targets_response()
+}
+
+/// Only `http`/`https` URLs are accepted — anything else (file paths, custom
+/// schemes) is rejected so this endpoint cannot be abused to launch local
+/// programs or leak files.
+fn build_open_url_response(query: Option<&str>) -> SimpleResponse {
+    let url = match query.and_then(|q| extract_query_value(q, "url")) {
+        Some(url) => url,
+        None => return SimpleResponse::error("missing url"),
+    };
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return SimpleResponse::error("Nur http/https-Links erlaubt.");
+    }
+
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .spawn();
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let result = std::process::Command::new("xdg-open").arg(&url).spawn();
+
+    match result {
+        Ok(_) => SimpleResponse::ok(),
+        Err(error) => {
+            SimpleResponse::error(format!("Browser-Start fehlgeschlagen: {error}"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Open-with-system API
 // ---------------------------------------------------------------------------
 
@@ -527,7 +803,7 @@ fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
         Err(error) => return OpenExternalResponse::error(error.to_string()),
     };
     let folder = match kind {
-        MediaKind::Manga => parent.join(crate::desktop_manga::folder_name(&subscription)),
+        MediaKind::Manga => parent.join(manga::folder_name(&subscription)),
         _ => webnovel_folder(&parent, &subscription),
     };
     if !folder.is_dir() {

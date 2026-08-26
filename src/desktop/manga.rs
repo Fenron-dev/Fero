@@ -1,4 +1,4 @@
-//! # desktop_manga
+//! # Manga subscriptions
 //!
 //! HTTP handlers and the download pipeline for manga subscriptions.
 //!

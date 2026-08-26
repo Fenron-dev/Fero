@@ -30,9 +30,9 @@ pub(super) fn build_webnovel_debug_log_response() -> WebnovelDebugLogResponse {
 }
 
 /// Opens the debug-log file in the OS default application.
-pub(super) fn build_open_debug_log_response() -> WebnovelSimpleResponse {
+pub(super) fn build_open_debug_log_response() -> SimpleResponse {
     let Some(path) = debug_log_path() else {
-        return WebnovelSimpleResponse::error("Log-Pfad nicht ermittelbar.");
+        return SimpleResponse::error("Log-Pfad nicht ermittelbar.");
     };
     // Make sure the file exists so the OS has something to open.
     if !path.exists() {
@@ -52,8 +52,8 @@ pub(super) fn build_open_debug_log_response() -> WebnovelSimpleResponse {
         .spawn();
 
     match result {
-        Ok(_) => WebnovelSimpleResponse::ok(),
-        Err(error) => WebnovelSimpleResponse::error(format!("Öffnen fehlgeschlagen: {error}")),
+        Ok(_) => SimpleResponse::ok(),
+        Err(error) => SimpleResponse::error(format!("Öffnen fehlgeschlagen: {error}")),
     }
 }
 

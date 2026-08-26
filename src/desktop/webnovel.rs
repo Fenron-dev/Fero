@@ -89,7 +89,7 @@ const WEBNOVEL_JOB_RETENTION_SECS: u64 = 10 * 60;
 ///
 /// Stamps the finish time when the mutation makes the job terminal, so
 /// [`prune_webnovel_jobs`] can expire it later.
-fn update_webnovel_job(job_id: &str, apply: impl FnOnce(&mut WebnovelJobStatus)) {
+pub(super) fn update_webnovel_job(job_id: &str, apply: impl FnOnce(&mut WebnovelJobStatus)) {
     if let Ok(mut jobs) = WEBNOVEL_JOBS.lock() {
         if let Some(status) = jobs.get_mut(job_id) {
             apply(status);
@@ -206,13 +206,13 @@ impl WebnovelSubscriptionSummary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelListResponse {
+pub(super) struct WebnovelListResponse {
     subscriptions: Vec<WebnovelSubscriptionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
+pub(super) fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
     let ws = match resolve_workspace(root_override.as_deref()) {
         Ok(ws) => ws,
@@ -247,224 +247,8 @@ fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListResponse {
     }
 }
 
-/// Resolves the active vault or produces a user-facing German error message.
-/// Fero's own storage plus the library it delivers into.
-///
-/// The two are deliberately separate. Subscriptions, blocklists and caches are
-/// Fero's bookkeeping and live in Fero's data directory; only finished works go
-/// into the library. Writing bookkeeping into the library would put Fero's
-/// files inside someone else's collection.
-pub(crate) struct Workspace {
-    /// Fero's data directory — subscriptions, blocklist, caches.
-    pub(crate) store: PathBuf,
-    /// Configured download targets per media kind, plus the shared fallback.
-    pub(crate) targets: TargetSettings,
-}
-
-impl Workspace {
-    /// Directory the work folder for `subscription` belongs in.
-    ///
-    /// Walks the target chain: the subscription's own target, then the media
-    /// kind's default, then the confirmed fallback. Fallible on purpose — if
-    /// nothing is configured, or a configured target is offline, the work must
-    /// not silently land somewhere else.
-    ///
-    /// # Errors
-    /// [`FeroError::InvalidTarget`] carrying the reason to show the user.
-    pub(crate) fn delivery_parent(
-        &self,
-        kind: MediaKind,
-        subscription: &Subscription,
-    ) -> Result<PathBuf> {
-        let own = subscription.target_dir.as_deref().map(Path::new);
-        match resolve_target(own, kind, &self.targets, &self.store) {
-            TargetResolution::Resolved { parent, .. } => Ok(parent),
-            TargetResolution::NeedsChoice { reason, .. } => Err(FeroError::InvalidTarget(reason)),
-        }
-    }
-}
-
-impl Workspace {
-    /// Chapter cache for one subscription, inside Fero's data directory.
-    ///
-    /// Used to live in the delivered work folder. That put Fero's scratch data
-    /// into the library and made every rebuild depend on the target being
-    /// online — the cache belongs to Fero, not to the collection.
-    ///
-    /// # Errors
-    /// [`FeroError::InvalidProperty`] if the id is not a well-formed
-    /// subscription id; it becomes a directory name.
-    pub(crate) fn chapter_cache(&self, subscription_id: &str) -> Result<PathBuf> {
-        if !is_valid_subscription_id(subscription_id) {
-            return Err(FeroError::InvalidProperty(format!(
-                "invalid subscription id: {subscription_id}"
-            )));
-        }
-        Ok(self.store.join("cache").join(subscription_id))
-    }
-
-    /// Delivery parent, or `None` when no usable target is configured.
-    ///
-    /// For read-only views: a subscription without a target is still worth
-    /// listing, just without the things that live in its folder. Deliberately
-    /// returns the *parent* — how a work folder is named is the business of the
-    /// media kind's module, not of the workspace.
-    pub(crate) fn delivery_parent_opt(
-        &self,
-        kind: MediaKind,
-        subscription: &Subscription,
-    ) -> Option<PathBuf> {
-        self.delivery_parent(kind, subscription).ok()
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetKindView {
-    id: &'static str,
-    label: &'static str,
-    folder_segment: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    directory: Option<String>,
-}
-
-/// What the settings page needs to render the target configuration.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TargetsResponse {
-    /// Fero's data directory, or `None` while setup is pending.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data_dir: Option<String>,
-    /// Why the data directory is unusable, when it is.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data_dir_problem: Option<String>,
-    /// Whether the data directory sits next to the application.
-    portable: bool,
-    kinds: Vec<TargetKindView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fallback: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-fn build_targets_response() -> TargetsResponse {
-    let data = resolve_data_dir();
-    let (data_dir, data_dir_problem, portable) = match &data {
-        DataDir::Portable(path) => (Some(path.display().to_string()), None, true),
-        DataDir::Chosen(path) => (Some(path.display().to_string()), None, false),
-        DataDir::NeedsSetup { reason, .. } => (None, Some(reason.clone()), false),
-    };
-    let settings = data.path().map(load_target_settings).unwrap_or_default();
-
-    TargetsResponse {
-        data_dir,
-        data_dir_problem,
-        portable,
-        kinds: MediaKind::ALL
-            .iter()
-            .map(|kind| TargetKindView {
-                id: kind.id(),
-                label: kind.label(),
-                folder_segment: kind.folder_segment(),
-                directory: settings
-                    .default_for(*kind)
-                    .map(|dir| dir.display().to_string()),
-            })
-            .collect(),
-        fallback: settings.fallback.clone(),
-        error: None,
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SaveTargetsRequest {
-    /// Media kind id, or `null` to address the shared fallback.
-    #[serde(default)]
-    kind: Option<String>,
-    /// New directory, or `null` to clear the entry.
-    #[serde(default)]
-    directory: Option<String>,
-}
-
-fn build_save_targets_response(body: &[u8]) -> TargetsResponse {
-    let req: SaveTargetsRequest = match serde_json::from_slice(body) {
-        Ok(req) => req,
-        Err(error) => {
-            return TargetsResponse {
-                error: Some(format!("Ungültige Anfrage: {error}")),
-                ..build_targets_response()
-            }
-        }
-    };
-    let Some(store) = resolve_data_dir().path().map(Path::to_path_buf) else {
-        return TargetsResponse {
-            error: Some("Kein nutzbarer Datenordner eingerichtet.".to_string()),
-            ..build_targets_response()
-        };
-    };
-
-    let mut settings = load_target_settings(&store);
-    match req.kind.as_deref() {
-        None => settings.fallback = req.directory.clone(),
-        Some(id) => match MediaKind::from_id(id) {
-            Some(kind) => settings.set_default(kind, req.directory.as_deref().map(Path::new)),
-            None => {
-                return TargetsResponse {
-                    error: Some(format!("Unbekannter Medientyp: {id}")),
-                    ..build_targets_response()
-                }
-            }
-        },
-    }
-
-    if let Err(error) = save_target_settings(&store, &settings) {
-        return TargetsResponse {
-            error: Some(error.to_string()),
-            ..build_targets_response()
-        };
-    }
-    build_targets_response()
-}
-
-/// File holding the configured download targets, inside Fero's data directory.
-const TARGET_SETTINGS_FILE: &str = "targets.json";
-
-/// Loads the configured targets; missing or unreadable settings mean "nothing
-/// configured yet", which the target chain reports as a choice for the user.
-pub(crate) fn load_target_settings(store: &Path) -> TargetSettings {
-    fs::read_to_string(store.join(TARGET_SETTINGS_FILE))
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
 /// Persists the configured targets.
 ///
-/// # Errors
-/// [`FeroError::Io`] when the file cannot be written.
-pub(crate) fn save_target_settings(store: &Path, settings: &TargetSettings) -> Result<()> {
-    let body = serde_json::to_string_pretty(settings)
-        .map_err(|error| FeroError::Serialization(error.to_string()))?;
-    fs::create_dir_all(store).map_err(FeroError::from)?;
-    fs::write(store.join(TARGET_SETTINGS_FILE), body).map_err(FeroError::from)
-}
-
-/// Resolves both locations, or reports which one is missing.
-pub(crate) fn resolve_workspace(
-    root_override: Option<&str>,
-) -> std::result::Result<Workspace, String> {
-    // The library root is deliberately not part of this any more: with a target
-    // per media kind (and per subscription) there is no single root to resolve.
-    // Where a work goes is decided per work, by the target chain.
-    let _ = root_override;
-    let store = match resolve_data_dir() {
-        DataDir::Portable(path) | DataDir::Chosen(path) => path,
-        DataDir::NeedsSetup { reason, .. } => return Err(reason),
-    };
-    let targets = load_target_settings(&store);
-    Ok(Workspace { store, targets })
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -476,7 +260,7 @@ struct WebnovelSubscribeRequest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelSubscribeResponse {
+pub(super) struct WebnovelSubscribeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     subscription: Option<WebnovelSubscriptionSummary>,
     /// True when the URL was already subscribed and no new record was created.
@@ -495,7 +279,7 @@ impl WebnovelSubscribeResponse {
     }
 }
 
-fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
+pub(super) fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscribeResponse {
     let req: WebnovelSubscribeRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
         Err(error) => return WebnovelSubscribeResponse::error(format!("Invalid request: {error}")),
@@ -617,48 +401,25 @@ struct WebnovelUnsubscribeRequest {
     root: Option<String>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebnovelSimpleResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-impl WebnovelSimpleResponse {
-    fn ok() -> Self {
-        Self {
-            ok: true,
-            error: None,
-        }
-    }
-    fn error(message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            error: Some(message.into()),
-        }
-    }
-}
-
 fn webnovel_default_true() -> bool {
     true
 }
 
-fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
+pub(super) fn build_webnovel_unsubscribe_response(body: &[u8]) -> SimpleResponse {
     let req: WebnovelUnsubscribeRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
-        Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
     let ws = match resolve_workspace(req.root.as_deref()) {
         Ok(ws) => ws,
-        Err(message) => return WebnovelSimpleResponse::error(message),
+        Err(message) => return SimpleResponse::error(message),
     };
 
     // Soft delete: the record moves to the in-app trash and can be restored.
     let subscription = match trash_subscription(&ws.store, &req.id) {
         Ok(Some(subscription)) => subscription,
-        Ok(None) => return WebnovelSimpleResponse::error("Abo nicht gefunden."),
-        Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+        Ok(None) => return SimpleResponse::error("Abo nicht gefunden."),
+        Err(error) => return SimpleResponse::error(error.to_string()),
     };
 
     if !req.keep_files {
@@ -666,7 +427,7 @@ fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
         // delete-files) instead of being removed — reversible via restore.
         let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
             Ok(parent) => parent,
-            Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+            Err(error) => return SimpleResponse::error(error.to_string()),
         };
         let novel_dir = webnovel_folder(&parent, &subscription);
         if novel_dir.exists() {
@@ -678,14 +439,14 @@ fn build_webnovel_unsubscribe_response(body: &[u8]) -> WebnovelSimpleResponse {
                 fs::remove_dir_all(&trash_target).ok();
             }
             if let Err(error) = fs::rename(&novel_dir, &trash_target) {
-                return WebnovelSimpleResponse::error(format!(
+                return SimpleResponse::error(format!(
                     "Dateien konnten nicht in den Papierkorb verschoben werden: {error}"
                 ));
             }
         }
     }
 
-    WebnovelSimpleResponse::ok()
+    SimpleResponse::ok()
 }
 
 /// Vault-trash location of a novel's files.
@@ -710,13 +471,13 @@ struct WebnovelTrashEntry {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelTrashResponse {
+pub(super) struct WebnovelTrashResponse {
     entries: Vec<WebnovelTrashEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
+pub(super) fn build_webnovel_trash_response(query: Option<&str>) -> WebnovelTrashResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
     let ws = match resolve_workspace(root_override.as_deref()) {
         Ok(ws) => ws,
@@ -758,23 +519,23 @@ struct WebnovelTrashActionRequest {
     root: Option<String>,
 }
 
-fn build_webnovel_restore_response(body: &[u8]) -> WebnovelSimpleResponse {
+pub(super) fn build_webnovel_restore_response(body: &[u8]) -> SimpleResponse {
     let req: WebnovelTrashActionRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
-        Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
     let ws = match resolve_workspace(req.root.as_deref()) {
         Ok(ws) => ws,
-        Err(message) => return WebnovelSimpleResponse::error(message),
+        Err(message) => return SimpleResponse::error(message),
     };
     let subscription = match restore_subscription(&ws.store, &req.id) {
         Ok(subscription) => subscription,
-        Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+        Err(error) => return SimpleResponse::error(error.to_string()),
     };
     // Bring trashed files back, if any.
     let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
         Ok(parent) => parent,
-        Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+        Err(error) => return SimpleResponse::error(error.to_string()),
     };
     let trash_source = webnovel_trash_folder(&parent, &subscription);
     if trash_source.exists() {
@@ -786,17 +547,17 @@ fn build_webnovel_restore_response(body: &[u8]) -> WebnovelSimpleResponse {
             fs::rename(&trash_source, &target).ok();
         }
     }
-    WebnovelSimpleResponse::ok()
+    SimpleResponse::ok()
 }
 
-fn build_webnovel_purge_response(body: &[u8]) -> WebnovelSimpleResponse {
+pub(super) fn build_webnovel_purge_response(body: &[u8]) -> SimpleResponse {
     let req: WebnovelTrashActionRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
-        Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
     let ws = match resolve_workspace(req.root.as_deref()) {
         Ok(ws) => ws,
-        Err(message) => return WebnovelSimpleResponse::error(message),
+        Err(message) => return SimpleResponse::error(message),
     };
     // Need the record before purging it to find its trashed folder.
     let trashed = list_trashed_subscriptions(&ws.store)
@@ -807,11 +568,11 @@ fn build_webnovel_purge_response(body: &[u8]) -> WebnovelSimpleResponse {
                 .find(|subscription| subscription.id == req.id)
         });
     if let Err(error) = purge_trashed_subscription(&ws.store, &req.id) {
-        return WebnovelSimpleResponse::error(error.to_string());
+        return SimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
         let Ok(parent) = ws.delivery_parent(MediaKind::Webnovel, &subscription) else {
-            return WebnovelSimpleResponse::error(
+            return SimpleResponse::error(
                 "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
             );
         };
@@ -820,7 +581,7 @@ fn build_webnovel_purge_response(body: &[u8]) -> WebnovelSimpleResponse {
             fs::remove_dir_all(&folder).ok();
         }
     }
-    WebnovelSimpleResponse::ok()
+    SimpleResponse::ok()
 }
 
 #[derive(Deserialize)]
@@ -846,20 +607,20 @@ struct WebnovelUpdateRequest {
     root: Option<String>,
 }
 
-fn build_webnovel_update_response(body: &[u8]) -> WebnovelSimpleResponse {
+pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
     let req: WebnovelUpdateRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
-        Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
     let ws = match resolve_workspace(req.root.as_deref()) {
         Ok(ws) => ws,
-        Err(message) => return WebnovelSimpleResponse::error(message),
+        Err(message) => return SimpleResponse::error(message),
     };
 
     let mut subscription = match load_subscription(&ws.store, &req.id) {
         Ok(Some(subscription)) => subscription,
-        Ok(None) => return WebnovelSimpleResponse::error("Abo nicht gefunden."),
-        Err(error) => return WebnovelSimpleResponse::error(error.to_string()),
+        Ok(None) => return SimpleResponse::error("Abo nicht gefunden."),
+        Err(error) => return SimpleResponse::error(error.to_string()),
     };
 
     if let Some(completed) = req.completed {
@@ -878,8 +639,8 @@ fn build_webnovel_update_response(body: &[u8]) -> WebnovelSimpleResponse {
     }
 
     match save_subscription(&ws.store, &subscription) {
-        Ok(()) => WebnovelSimpleResponse::ok(),
-        Err(error) => WebnovelSimpleResponse::error(error.to_string()),
+        Ok(()) => SimpleResponse::ok(),
+        Err(error) => SimpleResponse::error(error.to_string()),
     }
 }
 
@@ -909,7 +670,7 @@ struct WebnovelCheckRequest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelCheckResponse {
+pub(super) struct WebnovelCheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -947,7 +708,7 @@ impl GoodreadsMode {
     }
 }
 
-fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
+pub(super) fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
     let req: WebnovelCheckRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
         Err(error) => {
@@ -1021,14 +782,14 @@ fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelJobResponse {
+pub(super) struct WebnovelJobResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<WebnovelJobStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-fn build_webnovel_job_response(query: Option<&str>) -> WebnovelJobResponse {
+pub(super) fn build_webnovel_job_response(query: Option<&str>) -> WebnovelJobResponse {
     let job_id = query.and_then(|q| extract_query_value(q, "job_id"));
     let Some(job_id) = job_id else {
         return WebnovelJobResponse {
@@ -1406,7 +1167,7 @@ fn check_one_subscription(
 /// How many chapters may fail back to back before the run aborts (and resumes
 /// on the next check). Below this, a single failing chapter is skipped with a
 /// placeholder so one bad entry cannot block an entire novel.
-const MAX_CONSECUTIVE_CHAPTER_FAILURES: usize = 5;
+pub(super) const MAX_CONSECUTIVE_CHAPTER_FAILURES: usize = 5;
 
 /// Cover file names probed inside a novel folder, in preference order.
 const WEBNOVEL_COVER_NAMES: [&str; 3] = ["cover.jpg", "cover.png", "cover.webp"];
@@ -1483,7 +1244,7 @@ fn enrich_from_goodreads(
 
 /// Fills metadata gaps (description, genres, tags, cover, AniList link) from
 /// an AniList light-novel lookup. Best effort — errors are ignored.
-fn enrich_from_anilist(subscription: &mut Subscription) {
+pub(super) fn enrich_from_anilist(subscription: &mut Subscription) {
     let has_gaps = subscription.description.is_none()
         || subscription.genres.is_empty()
         || subscription.cover_url.is_none();
@@ -1577,7 +1338,7 @@ fn unique_novel_folder_name(ws: &Workspace, subscription: &Subscription) -> Stri
 /// The parent comes from the target chain and is resolved by the caller, so
 /// this stays a pure join and the fallible decision happens once per operation
 /// instead of once per path.
-fn webnovel_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
+pub(super) fn webnovel_folder(delivery_parent: &Path, subscription: &Subscription) -> PathBuf {
     delivery_parent.join(novel_folder_name(subscription))
 }
 
@@ -1683,7 +1444,7 @@ fn build_complete_epub(
 ///
 /// Replaces the former `.fero.yaml` sidecar. Descriptive metadata is not
 /// duplicated here — it goes into the EPUB's OPF, where any reader can see it.
-fn record_delivery(
+pub(super) fn record_delivery(
     work_dir: &Path,
     subscription: &Subscription,
     file_name: &str,
@@ -1721,44 +1482,16 @@ fn record_delivery(
 
 /// Opens an external web link in the system browser.
 ///
-/// Only `http`/`https` URLs are accepted — anything else (file paths, custom
-/// schemes) is rejected so this endpoint cannot be abused to launch local
-/// programs or leak files.
-fn build_open_url_response(query: Option<&str>) -> WebnovelSimpleResponse {
-    let url = match query.and_then(|q| extract_query_value(q, "url")) {
-        Some(url) => url,
-        None => return WebnovelSimpleResponse::error("missing url"),
-    };
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return WebnovelSimpleResponse::error("Nur http/https-Links erlaubt.");
-    }
-
-    #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &url])
-        .spawn();
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let result = std::process::Command::new("xdg-open").arg(&url).spawn();
-
-    match result {
-        Ok(_) => WebnovelSimpleResponse::ok(),
-        Err(error) => {
-            WebnovelSimpleResponse::error(format!("Browser-Start fehlgeschlagen: {error}"))
-        }
-    }
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebnovelBlocklistResponse {
+pub(super) struct WebnovelBlocklistResponse {
     entries: Vec<BlocklistEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-fn build_webnovel_blocklist_response(query: Option<&str>) -> WebnovelBlocklistResponse {
+pub(super) fn build_webnovel_blocklist_response(query: Option<&str>) -> WebnovelBlocklistResponse {
     let root_override = query.and_then(|q| extract_query_value(q, "root"));
     match resolve_workspace(root_override.as_deref()) {
         Ok(ws) => WebnovelBlocklistResponse {
@@ -1780,18 +1513,18 @@ struct WebnovelBlocklistSaveRequest {
     root: Option<String>,
 }
 
-fn build_webnovel_blocklist_save_response(body: &[u8]) -> WebnovelSimpleResponse {
+pub(super) fn build_webnovel_blocklist_save_response(body: &[u8]) -> SimpleResponse {
     let req: WebnovelBlocklistSaveRequest = match serde_json::from_slice(body) {
         Ok(req) => req,
-        Err(error) => return WebnovelSimpleResponse::error(format!("Invalid request: {error}")),
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
     let ws = match resolve_workspace(req.root.as_deref()) {
         Ok(ws) => ws,
-        Err(message) => return WebnovelSimpleResponse::error(message),
+        Err(message) => return SimpleResponse::error(message),
     };
     match save_user_blocklist(&ws.store, &req.entries) {
-        Ok(()) => WebnovelSimpleResponse::ok(),
-        Err(error) => WebnovelSimpleResponse::error(error.to_string()),
+        Ok(()) => SimpleResponse::ok(),
+        Err(error) => SimpleResponse::error(error.to_string()),
     }
 }
 
