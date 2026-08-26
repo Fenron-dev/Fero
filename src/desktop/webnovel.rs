@@ -1481,11 +1481,7 @@ fn load_cached_chapters(cache_dir: &Path, indices: &[u32]) -> Result<Vec<EpubCha
 /// Blocks that already exist are left alone — that is the whole point: a
 /// delivered file never changes, so a reading position inside it survives every
 /// later run. Only the running `[WIP]` file is rewritten.
-fn build_blocks(
-    novel_dir: &Path,
-    cache_dir: &Path,
-    subscription: &Subscription,
-) -> Result<usize> {
+fn build_blocks(novel_dir: &Path, cache_dir: &Path, subscription: &Subscription) -> Result<usize> {
     let safe_title = novel_folder_name(subscription);
     let downloaded: Vec<u32> = subscription
         .known_chapters

@@ -281,7 +281,8 @@ const SUBSCRIPTION_ID_LEN: usize = 16;
 impl Subscription {
     /// Chapters per block for this serial.
     pub fn batch_size(&self) -> u32 {
-        self.batch_size.unwrap_or(crate::core::batching::DEFAULT_BATCH_SIZE)
+        self.batch_size
+            .unwrap_or(crate::core::batching::DEFAULT_BATCH_SIZE)
     }
 }
 
