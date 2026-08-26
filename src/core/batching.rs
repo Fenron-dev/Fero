@@ -126,7 +126,10 @@ mod tests {
     fn full_blocks_are_finished() {
         let files = plan("Titel", &(1..=100).collect::<Vec<_>>(), 50);
 
-        assert_eq!(names(&files), ["Titel - 0001-0050.epub", "Titel - 0051-0100.epub"]);
+        assert_eq!(
+            names(&files),
+            ["Titel - 0001-0050.epub", "Titel - 0051-0100.epub"]
+        );
         assert!(files.iter().all(|file| file.kind == FileKind::Block));
     }
 
@@ -134,7 +137,10 @@ mod tests {
     fn the_running_edge_is_marked() {
         let files = plan("Titel", &(1..=63).collect::<Vec<_>>(), 50);
 
-        assert_eq!(names(&files), ["Titel - 0001-0050.epub", "Titel - 0051+ [WIP].epub"]);
+        assert_eq!(
+            names(&files),
+            ["Titel - 0001-0050.epub", "Titel - 0051+ [WIP].epub"]
+        );
         assert_eq!(files[0].kind, FileKind::Block);
         assert_eq!(files[1].kind, FileKind::Wip);
         assert!(files[1].is_rewritable());
@@ -160,7 +166,11 @@ mod tests {
         let mut chapters: Vec<u32> = (1..=50).collect();
         chapters.remove(6); // chapter 7 missing for now
         let with_gap = plan("Titel", &chapters, 50);
-        assert_eq!(with_gap[0].kind, FileKind::Block, "50 is present, so it is full");
+        assert_eq!(
+            with_gap[0].kind,
+            FileKind::Block,
+            "50 is present, so it is full"
+        );
 
         let filled = plan("Titel", &(1..=50).collect::<Vec<_>>(), 50);
         assert_eq!(with_gap[0].name, filled[0].name);
