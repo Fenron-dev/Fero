@@ -9,6 +9,7 @@ pub mod error;
 
 pub use api::anilist::AniListClient;
 pub use api::novel::{detect_source, ChapterRef, NovelInfo, NovelSource, PoliteClient};
+pub use core::batching::{plan as plan_batches, FileKind, PlannedFile, DEFAULT_BATCH_SIZE};
 pub use core::epub::{write_epub, EpubChapter, EpubMeta};
 pub use core::status::{resolve as resolve_series_status, SeriesStatus};
 pub use core::webnovel::{
