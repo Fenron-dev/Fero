@@ -43,8 +43,8 @@ pub(super) fn install(app: &AppHandle) -> Result<()> {
         .map_err(|error| FeroError::AppStartup(error.to_string()))?;
     let pause = MenuItem::with_id(app, "pause", "Zeitplan pausieren", true, None::<&str>)
         .map_err(|error| FeroError::AppStartup(error.to_string()))?;
-    let separator =
-        PredefinedMenuItem::separator(app).map_err(|error| FeroError::AppStartup(error.to_string()))?;
+    let separator = PredefinedMenuItem::separator(app)
+        .map_err(|error| FeroError::AppStartup(error.to_string()))?;
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)
         .map_err(|error| FeroError::AppStartup(error.to_string()))?;
 
