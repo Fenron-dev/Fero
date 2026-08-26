@@ -332,6 +332,7 @@ function openDetail(id) {
   // Nur Webnovels haben eine NovelUpdates-Statusquelle. Das Panel bei Manga
   // stehen zu lassen wuerde etwas versprechen, das nicht passiert.
   $("detail-status-panel").hidden = item.kind !== "webnovel";
+  $("detail-rebuild").hidden = item.kind !== "webnovel";
   $("detail-status-url").value = item.statusSourceUrl || "";
   refreshLoginState();
   showView("detail");
@@ -523,6 +524,32 @@ $("detail-open").addEventListener("click", async () => {
   if (!item) return;
   try {
     await post("reveal", { id: item.id, kind: item.kind });
+  } catch (error) {
+    setFeedback($("detail-feedback"), error.message, "error");
+  }
+});
+
+/* Bestands-Abos auf das Blockschema umstellen. Ausdruecklich nur auf Klick:
+ * dabei verschwinden die alten Dateien, und ein Lesestand darin ist weg. */
+$("detail-rebuild").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const ok = window.confirm(
+    `Dateien von „${item.title}" neu aufteilen?\n\n` +
+      "Die Kapitel werden in feste Blöcke à 50 geschrieben, die sich danach " +
+      "nie wieder ändern. Die bisherigen Dateien dieses Abos werden dabei " +
+      "entfernt — ein Lesestand darin geht verloren.\n\n" +
+      "Nur Dateien, die Fero selbst geschrieben hat, sind betroffen."
+  );
+  if (!ok) return;
+  try {
+    setFeedback($("detail-feedback"), "Wird neu aufgeteilt …");
+    const result = await post("webnovel/rebuild-blocks", { id: item.id });
+    setFeedback(
+      $("detail-feedback"),
+      `${result.written} Block-Dateien geschrieben, ${result.removed} alte entfernt.`,
+      "ok"
+    );
   } catch (error) {
     setFeedback($("detail-feedback"), error.message, "error");
   }

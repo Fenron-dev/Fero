@@ -110,6 +110,10 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             &build_webnovel_purge_response(request.body()),
             StatusCode::NOT_FOUND,
         ),
+        "/api/webnovel/rebuild-blocks" => json_outcome(
+            &webnovel::build_rebuild_blocks_response(request.body()),
+            StatusCode::NOT_FOUND,
+        ),
         "/api/webnovel/blocklist" => json_outcome(
             &build_webnovel_blocklist_response(request.uri().query()),
             StatusCode::INTERNAL_SERVER_ERROR,

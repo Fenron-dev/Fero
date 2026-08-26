@@ -11,6 +11,7 @@ use crate::core::status::{self, SeriesStatus};
 // Das Makro greift auf das private error-Feld zu und muss deshalb dort stehen,
 // wo die Strukturen definiert sind.
 impl_outcome!(
+    RebuildBlocksResponse,
     WebnovelListResponse,
     WebnovelSubscribeResponse,
     WebnovelTrashResponse,
@@ -1469,6 +1470,103 @@ fn load_cached_chapters(cache_dir: &Path, indices: &[u32]) -> Result<Vec<EpubCha
 ///
 /// Batch files are never rewritten afterwards, so reading progress in them
 /// survives future complete-EPUB rebuilds.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RebuildBlocksResponse {
+    /// Block files written.
+    written: usize,
+    /// Superseded files from the old naming scheme that were removed.
+    removed: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl RebuildBlocksResponse {
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            written: 0,
+            removed: 0,
+            error: Some(message.into()),
+        }
+    }
+}
+
+/// Rebuilds a serial's files as immutable blocks, replacing the old scheme.
+///
+/// Only ever runs on an explicit click. It removes the files delivered under
+/// the previous naming — a reading position inside those is lost, and no
+/// automatic run should be allowed to decide that for the user.
+pub(super) fn build_rebuild_blocks_response(body: &[u8]) -> RebuildBlocksResponse {
+    let req: WebnovelTrashActionRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return RebuildBlocksResponse::error(format!("Invalid request: {error}")),
+    };
+    let ws = match resolve_workspace(req.root.as_deref()) {
+        Ok(ws) => ws,
+        Err(message) => return RebuildBlocksResponse::error(message),
+    };
+    let subscription = match load_subscription(&ws.store, &req.id) {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return RebuildBlocksResponse::error("Abo nicht gefunden."),
+        Err(error) => return RebuildBlocksResponse::error(error.to_string()),
+    };
+    let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
+        Ok(parent) => parent,
+        Err(error) => return RebuildBlocksResponse::error(error.to_string()),
+    };
+    let novel_dir = webnovel_folder(&parent, &subscription);
+    let cache_dir = match ws.chapter_cache(&subscription.id) {
+        Ok(dir) => dir,
+        Err(error) => return RebuildBlocksResponse::error(error.to_string()),
+    };
+    if !cache_dir.is_dir() {
+        return RebuildBlocksResponse::error(
+            "Kein Kapitel-Zwischenspeicher vorhanden — bitte zuerst einmal prüfen lassen.",
+        );
+    }
+
+    let written = match build_blocks(&novel_dir, &cache_dir, &subscription) {
+        Ok(written) => written,
+        Err(error) => return RebuildBlocksResponse::error(error.to_string()),
+    };
+    let removed = remove_legacy_files(&novel_dir, &subscription);
+
+    RebuildBlocksResponse {
+        written,
+        removed,
+        error: None,
+    }
+}
+
+/// Deletes the files delivered under the pre-block naming scheme.
+///
+/// Matches only what Fero itself wrote for this serial: the single-file edition
+/// and the per-run `- Kapitel NNNN-MMMM` files. Anything else in the folder is
+/// left alone — Fero does not delete what it did not write.
+fn remove_legacy_files(novel_dir: &Path, subscription: &Subscription) -> usize {
+    let safe_title = novel_folder_name(subscription);
+    let single = format!("{safe_title}.epub");
+    let run_prefix = format!("{safe_title} - Kapitel ");
+
+    let Ok(entries) = fs::read_dir(novel_dir) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name != single && !name.starts_with(&run_prefix) {
+            continue;
+        }
+        if fs::remove_file(entry.path()).is_ok() {
+            debug_log(&format!("Blockumbau: {name} entfernt"));
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Writes the block files a serial should have.
 ///
 /// Blocks that already exist are left alone — that is the whole point: a
