@@ -179,6 +179,9 @@ struct WebnovelSubscriptionSummary {
     /// UNIX timestamp of the last status check.
     #[serde(skip_serializing_if = "Option::is_none")]
     status_checked_at: Option<u64>,
+    /// Whether the translation is finished, when the source says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_done: Option<bool>,
     /// Whether a cached cover exists in the work folder.
     ///
     /// Only a flag: with per-work targets there is no library-relative path to
@@ -218,6 +221,7 @@ impl WebnovelSubscriptionSummary {
             series_status: subscription.series_status,
             needs_attention: subscription.series_status.needs_attention(),
             status_checked_at: subscription.status_checked_at,
+            translation_done: subscription.translation_done,
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,

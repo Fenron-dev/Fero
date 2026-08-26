@@ -129,6 +129,31 @@ async function loadSubscriptions() {
   renderSubscriptions();
 }
 
+/* Der ermittelte Serienstatus. Drei davon aendern, was jemand tun wuerde:
+ * lizenziert heisst "jetzt laden, naechste Woche ist es vielleicht weg",
+ * abgebrochen heisst "wird nie fertig", Hiatus heisst "nicht kaputt, nur
+ * still". Die werden deshalb hervorgehoben. */
+const STATUS_LABELS = {
+  ongoing: { text: "laufend", tone: "" },
+  completed: { text: "abgeschlossen", tone: "ok" },
+  hiatus: { text: "Hiatus", tone: "warn" },
+  dropped: { text: "abgebrochen", tone: "warn" },
+  licensed: { text: "lizenziert", tone: "warn" },
+  unknown: { text: "", tone: "" },
+};
+
+const STATUS_HINTS = {
+  licensed: "Lizenziert — Fan-Übersetzungen verschwinden danach oft innerhalb von Tagen. Jetzt vollständig herunterladen.",
+  dropped: "Von der Übersetzergruppe abgebrochen. Möglicherweise übernimmt eine andere Gruppe.",
+  hiatus: "Pausiert — seit längerem keine neuen Kapitel. Die Prüfungen laufen weiter.",
+};
+
+function statusBadge(status) {
+  const entry = STATUS_LABELS[status];
+  if (!entry || !entry.text) return null;
+  return el("span", "badge " + entry.tone, entry.text);
+}
+
 function kindLabel(id) {
   const kind = mediaKinds.find((entry) => entry.id === id);
   return kind ? kind.label : id;
@@ -174,8 +199,15 @@ function renderSubscriptions() {
 
     const badges = el("div", "badges");
     if (!item.enabled) badges.appendChild(el("span", "badge off", "pausiert"));
-    if (item.completed) badges.appendChild(el("span", "badge ok", "abgeschlossen"));
-    if (item.hiatus) badges.appendChild(el("span", "badge warn", "Hiatus"));
+    // Der ermittelte Status schlaegt die Handschalter; nur solange keine Quelle
+    // befragt wurde, zaehlen completed/hiatus.
+    const badge = statusBadge(item.seriesStatus);
+    if (badge) {
+      badges.appendChild(badge);
+    } else {
+      if (item.completed) badges.appendChild(el("span", "badge ok", "abgeschlossen"));
+      if (item.hiatus) badges.appendChild(el("span", "badge warn", "Hiatus"));
+    }
     if (item.lastError) badges.appendChild(el("span", "badge warn", "Fehler"));
     if (badges.childElementCount) left.appendChild(badges);
 
@@ -255,12 +287,34 @@ function openDetail(id) {
   fact(facts, "Quelle", item.source);
   fact(facts, "Autor", item.author);
   fact(facts, "Kapitel", `${item.downloadedChapters} von ${item.knownChapters} geladen`);
-  fact(facts, "Status", item.completed ? "abgeschlossen" : item.hiatus ? "Hiatus" : "laufend");
+  const statusEntry = STATUS_LABELS[item.seriesStatus];
+  fact(
+    facts,
+    "Status",
+    statusEntry && statusEntry.text
+      ? statusEntry.text
+      : item.completed
+        ? "abgeschlossen"
+        : item.hiatus
+          ? "Hiatus"
+          : "laufend"
+  );
+  if (item.statusCheckedAt) {
+    fact(facts, "Status geprüft", new Date(item.statusCheckedAt * 1000).toLocaleDateString("de-DE"));
+  }
+  if (item.translationDone !== undefined && item.translationDone !== null) {
+    fact(facts, "Übersetzung", item.translationDone ? "vollständig" : "läuft noch");
+  }
   if (item.lastCheckUnix) {
     fact(facts, "Letzter Lauf", new Date(item.lastCheckUnix * 1000).toLocaleString("de-DE"));
   }
   if (item.lastError) fact(facts, "Letzter Fehler", item.lastError);
   if (item.ratingExternal) fact(facts, "Bewertung", `${item.ratingExternal} / 5`);
+
+  const banner = $("detail-status-banner");
+  const hint = STATUS_HINTS[item.seriesStatus];
+  banner.textContent = hint || "";
+  banner.hidden = !hint;
 
   $("detail-description").textContent = item.description || "";
 

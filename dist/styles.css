@@ -500,3 +500,15 @@ body {
   border-color: #5b2b2b;
   color: var(--danger);
 }
+
+/* Hinweis zum Serienstatus. Nur für die drei Fälle, die eine Entscheidung
+   auslösen — lizenziert, abgebrochen, pausiert. */
+.status-banner {
+  padding: 10px 14px;
+  margin: 0 0 var(--gap);
+  border: 1px solid #f0b86644;
+  border-radius: var(--radius);
+  background: #f0b86614;
+  color: var(--warn);
+  font-size: 13px;
+}
