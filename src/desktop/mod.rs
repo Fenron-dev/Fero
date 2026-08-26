@@ -12,12 +12,12 @@ mod routes;
 mod webnovel;
 
 use browser::*;
-use webnovel::*;
 pub(crate) use http::{extract_query_value, impl_outcome, json_response, Outcome};
 pub(crate) use log::debug_log;
 use log::debug_log_path;
 use log::{build_open_debug_log_response, build_webnovel_debug_log_response};
 use routes::handle_request;
+use webnovel::*;
 
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -728,9 +728,7 @@ fn build_open_url_response(query: Option<&str>) -> SimpleResponse {
 
     match result {
         Ok(_) => SimpleResponse::ok(),
-        Err(error) => {
-            SimpleResponse::error(format!("Browser-Start fehlgeschlagen: {error}"))
-        }
+        Err(error) => SimpleResponse::error(format!("Browser-Start fehlgeschlagen: {error}")),
     }
 }
 
@@ -853,5 +851,4 @@ mod tests {
         assert_eq!(safe_folder_segment("", "Fallback"), "Fallback");
         assert_eq!(safe_folder_segment("Titel", "Fallback"), "Titel");
     }
-
 }
