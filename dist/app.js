@@ -328,6 +328,11 @@ function openDetail(id) {
   setFeedback($("detail-feedback"), "");
   setFeedback($("detail-target-feedback"), "");
   setFeedback($("detail-login-feedback"), "");
+  setFeedback($("detail-status-feedback"), "");
+  // Nur Webnovels haben eine NovelUpdates-Statusquelle. Das Panel bei Manga
+  // stehen zu lassen wuerde etwas versprechen, das nicht passiert.
+  $("detail-status-panel").hidden = item.kind !== "webnovel";
+  $("detail-status-url").value = item.statusSourceUrl || "";
   refreshLoginState();
   showView("detail");
 }
@@ -345,6 +350,26 @@ function renderDetailTarget(item) {
 function currentItem() {
   return subscriptions.find((entry) => entry.id === currentDetailId);
 }
+
+$("detail-status-save").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-status-feedback");
+  try {
+    await post(`${item.kind}/update`, {
+      id: item.id,
+      statusSourceUrl: $("detail-status-url").value.trim(),
+    });
+    await loadSubscriptions();
+    setFeedback(
+      node,
+      "Gespeichert. Der Status wird beim nächsten Prüflauf gelesen.",
+      "ok"
+    );
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+});
 
 $("detail-pick-target").addEventListener("click", async () => {
   const item = currentItem();

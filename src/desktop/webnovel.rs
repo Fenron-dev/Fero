@@ -182,6 +182,9 @@ struct WebnovelSubscriptionSummary {
     /// Whether the translation is finished, when the source says so.
     #[serde(skip_serializing_if = "Option::is_none")]
     translation_done: Option<bool>,
+    /// Page the status is read from, when one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_source_url: Option<String>,
     /// Whether a cached cover exists in the work folder.
     ///
     /// Only a flag: with per-work targets there is no library-relative path to
@@ -222,6 +225,7 @@ impl WebnovelSubscriptionSummary {
             needs_attention: subscription.series_status.needs_attention(),
             status_checked_at: subscription.status_checked_at,
             translation_done: subscription.translation_done,
+            status_source_url: subscription.status_source_url.clone(),
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
@@ -627,6 +631,12 @@ struct WebnovelUpdateRequest {
     target_dir: Option<String>,
     #[serde(default)]
     clear_target_dir: bool,
+    /// Page the life-cycle status is read from (a NovelUpdates series page).
+    ///
+    /// Empty string clears it — unlike the target there is no separate flag,
+    /// because an empty URL is meaningless and unambiguous.
+    #[serde(default)]
+    status_source_url: Option<String>,
     #[serde(default)]
     completed: Option<bool>,
     #[serde(default)]
@@ -666,6 +676,12 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
         subscription.target_dir = None;
     } else if let Some(target) = req.target_dir {
         subscription.target_dir = Some(target);
+    }
+    if let Some(url) = req.status_source_url {
+        let trimmed = url.trim();
+        subscription.status_source_url = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        // A new source has to be read before it means anything.
+        subscription.status_checked_at = None;
     }
 
     match save_subscription(&ws.store, &subscription) {
