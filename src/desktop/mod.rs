@@ -805,8 +805,7 @@ fn build_cover_response(query: Option<&str>) -> tauri::http::Response<Vec<u8>> {
     let Some(id) = extract_query_value(query, "id") else {
         return not_found();
     };
-    let Some(kind) = extract_query_value(query, "kind").and_then(|k| MediaKind::from_id(&k))
-    else {
+    let Some(kind) = extract_query_value(query, "kind").and_then(|k| MediaKind::from_id(&k)) else {
         return not_found();
     };
     let Ok(ws) = resolve_workspace(None) else {
