@@ -58,11 +58,19 @@ function status(message, isError) {
  * nicht jeder Aufrufer sein eigenes Fehlerverhalten erfindet. */
 async function api(path, options) {
   const response = await fetch(`${API}/${path}`, options);
+  /* Erst den Body lesen: seit die API echte Statuscodes liefert, steht die
+   * verstaendliche Fehlermeldung im JSON — "400 Bad Request" allein hilft
+   * niemandem. Der Statustext ist nur der letzte Ausweg. */
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (ignored) {
+    /* kein JSON — unten faellt es auf den Statustext zurueck */
+  }
+  if (data && data.error) throw new Error(data.error);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
-  const data = await response.json();
-  if (data && data.error) throw new Error(data.error);
   return data;
 }
 
@@ -784,6 +792,24 @@ function renderTargetRows(data) {
   fallback.className = "mono grow" + (data.fallback ? "" : " unset");
 }
 
+/* Datenordner frei waehlen — der Ausweg, wenn der Ordner neben der App nicht
+ * beschreibbar ist (z.B. weil macOS die App transloziert hat). */
+$("data-dir-pick").addEventListener("click", async () => {
+  try {
+    const directory = await pickFolder();
+    if (!directory) return;
+    await post("data-dir/save", { directory });
+    await loadTargets();
+    setFeedback(
+      $("data-dir-feedback"),
+      "Datenordner gesetzt. Abos und Einstellungen liegen jetzt dort.",
+      "ok"
+    );
+  } catch (error) {
+    setFeedback($("data-dir-feedback"), error.message, "error");
+  }
+});
+
 document.querySelectorAll("[data-role='pick'], [data-role='clear']").forEach((button) => {
   button.addEventListener("click", () => {
     saveTarget(button.dataset.targetKind || null, button.dataset.role === "pick");
@@ -911,6 +937,7 @@ $("block-add").addEventListener("click", () => {
 async function loadLog() {
   try {
     const data = await api("webnovel/debug-log");
+    $("log-path").textContent = data.path || "";
     $("log-body").textContent = data.content || "(leer)";
   } catch (error) {
     $("log-body").textContent = error.message;

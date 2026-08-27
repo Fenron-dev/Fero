@@ -790,6 +790,37 @@ fn build_targets_response() -> TargetsResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SetDataDirRequest {
+    directory: String,
+}
+
+/// Sets the data directory to a folder the user picked.
+///
+/// This is the "frei wählbar" half of the portable design: when the folder
+/// next to the app is unusable — a translocated app sits on a read-only
+/// filesystem — the user chooses where Fero's data lives, and a pointer file
+/// in the home directory remembers it.
+fn build_set_data_dir_response(body: &[u8]) -> TargetsResponse {
+    let req: SetDataDirRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => {
+            return TargetsResponse {
+                error: Some(format!("Ungültige Anfrage: {error}")),
+                ..build_targets_response()
+            }
+        }
+    };
+    match crate::deliver::targets::set_data_dir(Path::new(&req.directory)) {
+        Ok(()) => build_targets_response(),
+        Err(error) => TargetsResponse {
+            error: Some(error.to_string()),
+            ..build_targets_response()
+        },
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SaveTargetsRequest {
     /// Media kind id, or `null` to address the shared fallback.
     #[serde(default)]

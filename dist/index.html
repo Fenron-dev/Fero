@@ -169,6 +169,10 @@
         </p>
         <p class="mono" id="data-dir"></p>
         <p class="feedback" id="data-dir-problem"></p>
+        <div class="row" style="margin-top: 10px">
+          <button class="action" id="data-dir-pick">Datenordner wählen</button>
+        </div>
+        <p class="feedback" id="data-dir-feedback"></p>
       </div>
 
       <div class="panel">
@@ -259,6 +263,11 @@
           <button class="action" id="log-open">Datei öffnen</button>
         </div>
       </header>
+      <p class="hint">
+        Diese Datei kannst du bei Problemen einfach weitergeben — sie enthält,
+        was Fero zuletzt getan hat.
+      </p>
+      <p class="mono" id="log-path"></p>
       <pre class="log" id="log-body"></pre>
     </section>
   </main>
