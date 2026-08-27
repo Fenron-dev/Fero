@@ -41,6 +41,19 @@ pub(crate) fn extract_query_value(query: &str, wanted_key: &str) -> Option<Strin
     None
 }
 
+/// Serves raw bytes, for the one endpoint that answers with an image.
+pub(super) fn bytes_response(
+    status: StatusCode,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, content_type)
+        .body(body)
+        .expect("response construction should succeed")
+}
+
 /// A response that can report a failure.
 ///
 /// Every handler answers with a struct carrying an optional `error`. The trait

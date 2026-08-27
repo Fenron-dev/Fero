@@ -1258,7 +1258,7 @@ fn manga_trash_folder(delivery_parent: &Path, subscription: &Subscription) -> Pa
 }
 
 /// Returns the existing cover file path inside a series folder, if any.
-fn manga_cover_path(series_dir: &Path) -> Option<PathBuf> {
+pub(super) fn manga_cover_path(series_dir: &Path) -> Option<PathBuf> {
     MANGA_COVER_NAMES
         .iter()
         .map(|name| series_dir.join(name))

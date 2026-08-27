@@ -87,6 +87,38 @@ async function pickFolder() {
   return data.path || null;
 }
 
+/* Eigener Bestaetigungsdialog. window.confirm liefert in Tauris WebView
+ * sofort "abgebrochen" zurueck — jede damit abgesicherte Aktion tat schlicht
+ * nichts. Der Dialog hier ist eigenes DOM und funktioniert ueberall. */
+function confirmAction(message, confirmLabel) {
+  return new Promise((resolve) => {
+    const overlay = el("div", "confirm-overlay");
+    const box = el("div", "confirm-box");
+    box.appendChild(el("p", "confirm-text", message));
+
+    const row = el("div", "row");
+    const ok = el("button", "action danger", confirmLabel || "Ja, fortfahren");
+    const cancel = el("button", "action", "Abbrechen");
+    row.appendChild(ok);
+    row.appendChild(cancel);
+    box.appendChild(row);
+    overlay.appendChild(box);
+
+    const close = (answer) => {
+      overlay.remove();
+      resolve(answer);
+    };
+    ok.addEventListener("click", () => close(true));
+    cancel.addEventListener("click", () => close(false));
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close(false);
+    });
+
+    document.body.appendChild(overlay);
+    cancel.focus();
+  });
+}
+
 // ── Navigation ───────────────────────────────────────────────────────────
 
 function showView(name) {
@@ -320,6 +352,17 @@ function openDetail(id) {
   if (item.lastError) fact(facts, "Letzter Fehler", item.lastError);
   if (item.ratingExternal) fact(facts, "Bewertung", `${item.ratingExternal} / 5`);
 
+  const cover = $("detail-cover");
+  if (item.hasCover) {
+    /* Zeitstempel gegen den Bild-Cache: nach einem Prüflauf kann ein neues
+     * Cover liegen, die URL wäre sonst dieselbe. */
+    cover.src = `${API}/cover?id=${encodeURIComponent(item.id)}&kind=${item.kind}&t=${Date.now()}`;
+    cover.hidden = false;
+  } else {
+    cover.hidden = true;
+    cover.removeAttribute("src");
+  }
+
   const banner = $("detail-status-banner");
   const hint = STATUS_HINTS[item.seriesStatus];
   banner.textContent = hint || "";
@@ -543,12 +586,13 @@ $("detail-open").addEventListener("click", async () => {
 $("detail-rebuild").addEventListener("click", async () => {
   const item = currentItem();
   if (!item) return;
-  const ok = window.confirm(
+  const ok = await confirmAction(
     `Dateien von „${item.title}" neu aufteilen?\n\n` +
-      "Die Kapitel werden in feste Blöcke à 50 geschrieben, die sich danach " +
-      "nie wieder ändern. Die bisherigen Dateien dieses Abos werden dabei " +
+      "Die Kapitel werden in feste Blöcke geschrieben, die sich danach nie " +
+      "wieder ändern. Die bisherigen Dateien dieses Abos werden dabei " +
       "entfernt — ein Lesestand darin geht verloren.\n\n" +
-      "Nur Dateien, die Fero selbst geschrieben hat, sind betroffen."
+      "Nur Dateien, die Fero selbst geschrieben hat, sind betroffen.",
+    "Neu aufteilen"
   );
   if (!ok) return;
   try {
@@ -567,10 +611,12 @@ $("detail-rebuild").addEventListener("click", async () => {
 $("detail-delete").addEventListener("click", async () => {
   const item = currentItem();
   if (!item) return;
-  const keep = window.confirm(
-    `„${item.title}" löschen?\n\nOK: nur das Abo entfernen, die Dateien bleiben liegen.\nAbbrechen: nichts tun.`
+  const ok = await confirmAction(
+    `„${item.title}" löschen?\n\nDas Abo wandert in den Papierkorb; die ` +
+      "heruntergeladenen Dateien bleiben am Zielort liegen.",
+    "Abo löschen"
   );
-  if (!keep) return;
+  if (!ok) return;
   try {
     await post(`${item.kind}/unsubscribe`, { id: item.id, keepFiles: true });
     status(`„${item.title}" entfernt. Die Dateien liegen weiterhin am Zielort.`);
@@ -692,10 +738,12 @@ async function loadTrash() {
     const restore = el("button", "action", "Wiederherstellen");
     restore.addEventListener("click", () => trashAction(entry, "restore"));
     const purge = el("button", "action danger", "Endgültig löschen");
-    purge.addEventListener("click", () => {
-      if (window.confirm(`„${entry.title}" endgültig löschen?`)) {
-        trashAction(entry, "purge");
-      }
+    purge.addEventListener("click", async () => {
+      const ok = await confirmAction(
+        `„${entry.title}" endgültig löschen? Das lässt sich nicht rückgängig machen.`,
+        "Endgültig löschen"
+      );
+      if (ok) trashAction(entry, "purge");
     });
     actions.appendChild(restore);
     actions.appendChild(purge);

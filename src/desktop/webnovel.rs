@@ -1416,7 +1416,7 @@ pub(super) fn enrich_from_anilist(subscription: &mut Subscription) {
 }
 
 /// Returns the existing cover file path inside a novel folder, if any.
-fn load_novel_cover_path(novel_dir: &Path) -> Option<PathBuf> {
+pub(super) fn load_novel_cover_path(novel_dir: &Path) -> Option<PathBuf> {
     WEBNOVEL_COVER_NAMES
         .iter()
         .map(|name| novel_dir.join(name))

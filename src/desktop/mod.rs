@@ -788,6 +788,62 @@ fn build_targets_response() -> TargetsResponse {
     }
 }
 
+/// Serves a subscription's cached cover image.
+///
+/// Bytes rather than JSON: the frontend points an `<img>` straight at this.
+/// Every failure is a plain 404 — a missing cover is not an error worth a
+/// message, the image slot simply stays empty.
+fn build_cover_response(query: Option<&str>) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::StatusCode;
+
+    let not_found =
+        || http::bytes_response(StatusCode::NOT_FOUND, "text/plain", b"not found".to_vec());
+
+    let Some(query) = query else {
+        return not_found();
+    };
+    let Some(id) = extract_query_value(query, "id") else {
+        return not_found();
+    };
+    let Some(kind) = extract_query_value(query, "kind").and_then(|k| MediaKind::from_id(&k))
+    else {
+        return not_found();
+    };
+    let Ok(ws) = resolve_workspace(None) else {
+        return not_found();
+    };
+    let loaded = match kind {
+        MediaKind::Manga => crate::core::manga::load_subscription(&ws.store, &id),
+        _ => load_subscription(&ws.store, &id),
+    };
+    let Ok(Some(subscription)) = loaded else {
+        return not_found();
+    };
+    let Ok(parent) = ws.delivery_parent(kind, &subscription) else {
+        return not_found();
+    };
+    let cover = match kind {
+        MediaKind::Manga => {
+            manga::manga_cover_path(&parent.join(manga::folder_name(&subscription)))
+        }
+        _ => webnovel::load_novel_cover_path(&webnovel_folder(&parent, &subscription)),
+    };
+    let Some(path) = cover else {
+        return not_found();
+    };
+    let Ok(body) = fs::read(&path) else {
+        return not_found();
+    };
+
+    let content_type = match path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => "image/jpeg",
+    };
+    http::bytes_response(StatusCode::OK, content_type, body)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SetDataDirRequest {
@@ -950,7 +1006,13 @@ fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
         Ok(ws) => ws,
         Err(message) => return OpenExternalResponse::error(message),
     };
-    let subscription = match load_subscription(&ws.store, &req.id) {
+    // Jeder Medientyp hat seinen eigenen Store — ein Manga liegt nie im
+    // Webnovel-Store, die Suche muss dem Typ folgen.
+    let loaded = match kind {
+        MediaKind::Manga => crate::core::manga::load_subscription(&ws.store, &req.id),
+        _ => load_subscription(&ws.store, &req.id),
+    };
+    let subscription = match loaded {
         Ok(Some(subscription)) => subscription,
         Ok(None) => return OpenExternalResponse::error("Abo nicht gefunden."),
         Err(error) => return OpenExternalResponse::error(error.to_string()),
