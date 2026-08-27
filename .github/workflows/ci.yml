@@ -56,7 +56,12 @@ jobs:
           for kind, items in sorted(report.get("warnings", {}).items()):
               print(f"Hinweis ({kind}): {len(items)}")
               for item in items:
-                  print(f"  {item['advisory']['id']}  {item['package']['name']}")
+                  # Nicht jeder Hinweistyp traegt ein Advisory - "yanked"
+                  # beschreibt nur eine zurueckgezogene Version.
+                  advisory = (item.get("advisory") or {}).get("id", "-")
+                  package = (item.get("package") or {}).get("name", "?")
+                  version = (item.get("package") or {}).get("version", "")
+                  print(f"  {advisory}  {package} {version}")
           sys.exit(1 if vulns["found"] else 0)
           PY
 
