@@ -35,6 +35,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::core::status::SeriesStatus;
+use crate::deliver::targets::MediaKind;
 use crate::error::{FeroError, Result};
 
 // ---------------------------------------------------------------------------
@@ -126,6 +127,25 @@ pub struct Subscription {
     /// UNIX timestamp of the last status check — drives the weekly cadence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_checked_at: Option<u64>,
+    /// Category this subscription belongs to, when it is not the engine's
+    /// plain default — an adult novel is scraped like a regular one, only its
+    /// shelf and delivery target differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_kind: Option<MediaKind>,
+    /// Cap on chapters downloaded in total, for trying a title out first.
+    ///
+    /// A 3.000-chapter manga is a lot of disk for something one might not
+    /// like; ten chapters answer that question. `None` means everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_limit: Option<u32>,
+    /// Parent directory the files were actually delivered to.
+    ///
+    /// Normally equal to what the target chain resolves. It differs while the
+    /// real target is offline and files are staged locally — then this is the
+    /// truth about where the files are, and the chain only says where they
+    /// should end up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_to: Option<String>,
     /// Chapters per block, when this serial should differ from the default.
     ///
     /// A serial with very short chapters reads better in larger blocks; one
@@ -226,6 +246,9 @@ impl Subscription {
             series_status: SeriesStatus::Unknown,
             translation_done: None,
             status_checked_at: None,
+            media_kind: None,
+            download_limit: None,
+            delivered_to: None,
             batch_size: None,
             status_source_url: None,
             known_chapters: Vec::new(),

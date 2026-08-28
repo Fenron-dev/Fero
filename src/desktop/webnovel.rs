@@ -184,6 +184,17 @@ struct WebnovelSubscriptionSummary {
     /// Whether the translation is finished, when the source says so.
     #[serde(skip_serializing_if = "Option::is_none")]
     translation_done: Option<bool>,
+    /// Category this subscription belongs to.
+    media_kind: MediaKind,
+    /// Total chapter cap, when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_limit: Option<u32>,
+    /// Where the files currently live, when anything was delivered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivered_to: Option<String>,
+    /// True when the files sit somewhere else than the target chain points —
+    /// staged locally while the share was offline, or the category changed.
+    needs_relocation: bool,
     /// Page the status is read from, when one is known.
     #[serde(skip_serializing_if = "Option::is_none")]
     status_source_url: Option<String>,
@@ -206,10 +217,24 @@ struct WebnovelSubscriptionSummary {
 impl WebnovelSubscriptionSummary {
     /// Builds the summary. `work_dir` is `None` when no target is configured
     /// yet — the subscription is still listed, just without a cover.
-    fn from_subscription(subscription: &Subscription, work_dir: Option<&Path>) -> Self {
-        let has_cover = work_dir
-            .map(|dir| load_novel_cover_path(dir).is_some())
+    fn from_subscription(subscription: &Subscription, ws: &Workspace) -> Self {
+        let kind = subscription_kind(subscription);
+        let desired = ws.delivery_parent(kind, subscription).ok();
+        // Cover und Dateien liegen dort, wo ausgeliefert wurde — nicht dort,
+        // wo die Zielkette gerade hinzeigt.
+        let current = subscription
+            .delivered_to
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| desired.clone());
+        let has_cover = current
+            .as_ref()
+            .map(|parent| load_novel_cover_path(&webnovel_folder(parent, subscription)).is_some())
             .unwrap_or(false);
+        let needs_relocation = matches!(
+            (subscription.delivered_to.as_deref(), desired.as_ref()),
+            (Some(now), Some(target)) if Path::new(now) != target.as_path()
+        );
         Self {
             id: subscription.id.clone(),
             url: subscription.url.clone(),
@@ -227,6 +252,10 @@ impl WebnovelSubscriptionSummary {
             needs_attention: subscription.series_status.needs_attention(),
             status_checked_at: subscription.status_checked_at,
             translation_done: subscription.translation_done,
+            media_kind: kind,
+            download_limit: subscription.download_limit,
+            delivered_to: subscription.delivered_to.clone(),
+            needs_relocation,
             status_source_url: subscription.status_source_url.clone(),
             has_cover,
             completed: subscription.completed,
@@ -265,13 +294,7 @@ pub(super) fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListR
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    let work_dir = ws
-                        .delivery_parent_opt(MediaKind::Webnovel, subscription)
-                        .map(|parent| webnovel_folder(&parent, subscription));
-                    WebnovelSubscriptionSummary::from_subscription(
-                        subscription,
-                        work_dir.as_deref(),
-                    )
+                    WebnovelSubscriptionSummary::from_subscription(subscription, &ws)
                 })
                 .collect(),
             error: None,
@@ -290,6 +313,9 @@ pub(super) fn build_webnovel_list_response(query: Option<&str>) -> WebnovelListR
 #[serde(rename_all = "camelCase")]
 struct WebnovelSubscribeRequest {
     url: String,
+    /// Category the new subscription belongs to (`webnovel` or `hwebnovel`).
+    #[serde(default)]
+    media_kind: Option<String>,
     #[serde(default)]
     root: Option<String>,
 }
@@ -340,10 +366,7 @@ pub(super) fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscrib
         Ok(Some(existing)) => {
             return WebnovelSubscribeResponse {
                 subscription: Some(WebnovelSubscriptionSummary::from_subscription(
-                    &existing,
-                    ws.delivery_parent_opt(MediaKind::Webnovel, &existing)
-                        .map(|parent| webnovel_folder(&parent, &existing))
-                        .as_deref(),
+                    &existing, &ws,
                 )),
                 already_subscribed: true,
                 error: None,
@@ -389,6 +412,11 @@ pub(super) fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscrib
     // Pin the folder now: the title may change upstream later, and two novels
     // can sanitize to the same segment — both would otherwise end up sharing
     // one directory (and one chapter cache).
+    subscription.media_kind = req
+        .media_kind
+        .as_deref()
+        .and_then(MediaKind::from_id)
+        .filter(|kind| kind.uses_novel_engine());
     subscription.folder_name = Some(unique_novel_folder_name(&ws, &subscription));
     subscription.author = info.author.clone();
     subscription.cover_url = info.cover_url.clone();
@@ -415,9 +443,7 @@ pub(super) fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscrib
         Ok(()) => WebnovelSubscribeResponse {
             subscription: Some(WebnovelSubscriptionSummary::from_subscription(
                 &subscription,
-                ws.delivery_parent_opt(MediaKind::Webnovel, &subscription)
-                    .map(|parent| webnovel_folder(&parent, &subscription))
-                    .as_deref(),
+                &ws,
             )),
             already_subscribed: false,
             error: None,
@@ -461,7 +487,7 @@ pub(super) fn build_webnovel_unsubscribe_response(body: &[u8]) -> SimpleResponse
     if !req.keep_files {
         // Files move into the vault .trash folder (same convention as
         // delete-files) instead of being removed — reversible via restore.
-        let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
+        let parent = match current_parent(&ws, subscription_kind(&subscription), &subscription) {
             Ok(parent) => parent,
             Err(error) => return SimpleResponse::error(error.to_string()),
         };
@@ -569,7 +595,7 @@ pub(super) fn build_webnovel_restore_response(body: &[u8]) -> SimpleResponse {
         Err(error) => return SimpleResponse::error(error.to_string()),
     };
     // Bring trashed files back, if any.
-    let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
+    let parent = match current_parent(&ws, subscription_kind(&subscription), &subscription) {
         Ok(parent) => parent,
         Err(error) => return SimpleResponse::error(error.to_string()),
     };
@@ -607,7 +633,7 @@ pub(super) fn build_webnovel_purge_response(body: &[u8]) -> SimpleResponse {
         return SimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let Ok(parent) = ws.delivery_parent(MediaKind::Webnovel, &subscription) else {
+        let Ok(parent) = current_parent(&ws, subscription_kind(&subscription), &subscription) else {
             return SimpleResponse::error(
                 "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
             );
@@ -639,6 +665,12 @@ struct WebnovelUpdateRequest {
     /// because an empty URL is meaningless and unambiguous.
     #[serde(default)]
     status_source_url: Option<String>,
+    /// New total chapter cap; zero lifts the limit.
+    #[serde(default)]
+    download_limit: Option<u32>,
+    /// New category (`webnovel` or `hwebnovel`).
+    #[serde(default)]
+    media_kind: Option<String>,
     #[serde(default)]
     completed: Option<bool>,
     #[serde(default)]
@@ -684,6 +716,16 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
         subscription.status_source_url = (!trimmed.is_empty()).then(|| trimmed.to_string());
         // A new source has to be read before it means anything.
         subscription.status_checked_at = None;
+    }
+    if let Some(limit) = req.download_limit {
+        subscription.download_limit = (limit > 0).then_some(limit);
+    }
+    if let Some(kind) = req.media_kind.as_deref().and_then(MediaKind::from_id) {
+        if kind.uses_novel_engine() {
+            // Die Kategorie bestimmt das Ziel; die Dateien liegen weiter am
+            // alten Ort, bis der Nutzer sie ausdruecklich verschiebt.
+            subscription.media_kind = Some(kind);
+        }
     }
 
     match save_subscription(&ws.store, &subscription) {
@@ -1008,6 +1050,16 @@ fn run_webnovel_check(
 }
 
 /// Checks one subscription: refresh ToC, download pending chapters, build EPUBs.
+/// Category of a subscription handled by this engine.
+///
+/// Stored records from before the categories default to the plain kind.
+fn subscription_kind(subscription: &Subscription) -> MediaKind {
+    subscription
+        .media_kind
+        .filter(|kind| kind.uses_novel_engine())
+        .unwrap_or(MediaKind::Webnovel)
+}
+
 /// Refreshes the life-cycle status when it is stale, at most weekly.
 ///
 /// Best effort and silent: a status is a nice-to-have, and a NovelUpdates that
@@ -1149,7 +1201,24 @@ fn check_one_subscription(
         }
     }
 
-    let parent = ws.delivery_parent(MediaKind::Webnovel, subscription)?;
+    // Wo die Dateien wirklich liegen, hat Vorrang: waehrend das Ziel offline
+    // war, wurde lokal gesammelt, und Nachschub gehoert zu den Geschwistern —
+    // nicht auf die gerade wieder erreichbare Freigabe daneben.
+    let kind = subscription_kind(subscription);
+    let parent = match subscription.delivered_to.as_ref() {
+        Some(current) => PathBuf::from(current),
+        None => {
+            let (parent, staged) = ws.delivery_parent_or_staging(kind, subscription)?;
+            if staged {
+                update_webnovel_job(job_id, |status| {
+                    status.message =
+                        Some("Ziel nicht erreichbar — es wird lokal gesammelt.".to_string());
+                });
+            }
+            parent
+        }
+    };
+    subscription.delivered_to = Some(parent.display().to_string());
     let novel_dir = webnovel_folder(&parent, subscription);
     let cache_dir = ws.chapter_cache(&subscription.id)?;
     migrate_chapter_cache(&novel_dir, &cache_dir);
@@ -1162,7 +1231,7 @@ fn check_one_subscription(
     // late cover is not worth reshuffling every reading position for.
     ensure_novel_cover(client, subscription, &novel_dir);
 
-    let pending: Vec<usize> = subscription
+    let mut pending: Vec<usize> = subscription
         .known_chapters
         .iter()
         .enumerate()
@@ -1172,6 +1241,19 @@ fn check_one_subscription(
         .filter(|(_, chapter)| chapter.needs_fetch())
         .map(|(position, _)| position)
         .collect();
+    // Das Kapitel-Limit deckelt den Gesamtbestand, nicht den einzelnen Lauf:
+    // erst reinschnuppern, spaeter hochsetzen, wenn der Titel gefaellt.
+    if let Some(limit) = subscription.download_limit {
+        let already = subscription
+            .known_chapters
+            .iter()
+            .filter(|chapter| chapter.downloaded_at_unix.is_some())
+            .count();
+        let allowed = (limit as usize).saturating_sub(already);
+        if pending.len() > allowed {
+            pending.truncate(allowed);
+        }
+    }
     update_webnovel_job(job_id, |status| {
         status.total_chapters = pending.len();
     });
@@ -1557,7 +1639,7 @@ pub(super) fn build_rebuild_blocks_response(body: &[u8]) -> RebuildBlocksRespons
         Ok(None) => return RebuildBlocksResponse::error("Abo nicht gefunden."),
         Err(error) => return RebuildBlocksResponse::error(error.to_string()),
     };
-    let parent = match ws.delivery_parent(MediaKind::Webnovel, &subscription) {
+    let parent = match current_parent(&ws, subscription_kind(&subscription), &subscription) {
         Ok(parent) => parent,
         Err(error) => return RebuildBlocksResponse::error(error.to_string()),
     };
@@ -1734,7 +1816,7 @@ pub(super) fn record_delivery(
     let mut record = manifest::load_or_new(
         work_dir,
         &subscription.id,
-        MediaKind::Webnovel,
+        subscription_kind(subscription),
         &subscription.url,
         &subscription.title,
     );

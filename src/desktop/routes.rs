@@ -28,6 +28,10 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             APP_JS,
         ),
         "/styles.css" => response(StatusCode::OK, "text/css; charset=utf-8", STYLES_CSS),
+        "/api/relocate" => json_outcome(
+            &build_relocate_response(request.body()),
+            StatusCode::BAD_REQUEST,
+        ),
         "/api/cover" => build_cover_response(request.uri().query()),
         "/api/data-dir/save" => json_outcome(
             &build_set_data_dir_response(request.body()),

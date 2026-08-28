@@ -516,6 +516,40 @@ impl Workspace {
             TargetResolution::NeedsChoice { reason, .. } => Err(FeroError::InvalidTarget(reason)),
         }
     }
+
+    /// Like [`Self::delivery_parent`], but stages locally when the configured
+    /// target is merely offline.
+    ///
+    /// An unreachable network share must not stop the chapters from being
+    /// collected — they land in Fero's own staging area, and the user moves
+    /// them over with one click once the share is back. A target that was
+    /// never configured still errors: there the user has to choose first.
+    ///
+    /// The second value says whether staging happened.
+    pub(crate) fn delivery_parent_or_staging(
+        &self,
+        kind: MediaKind,
+        subscription: &Subscription,
+    ) -> Result<(PathBuf, bool)> {
+        let own = subscription.target_dir.as_deref().map(Path::new);
+        match resolve_target(own, kind, &self.targets, &self.store) {
+            TargetResolution::Resolved { parent, .. } => Ok((parent, false)),
+            TargetResolution::NeedsChoice {
+                configured: true,
+                reason,
+                ..
+            } => {
+                debug_log(&format!("Ziel offline, sammle lokal weiter: {reason}"));
+                Ok((self.staging_parent(kind), true))
+            }
+            TargetResolution::NeedsChoice { reason, .. } => Err(FeroError::InvalidTarget(reason)),
+        }
+    }
+
+    /// Where staged files live while the real target is unreachable.
+    pub(crate) fn staging_parent(&self, kind: MediaKind) -> PathBuf {
+        self.store.join("Downloads").join(kind.folder_segment())
+    }
 }
 
 impl Workspace {
@@ -537,19 +571,6 @@ impl Workspace {
         Ok(self.store.join("cache").join(subscription_id))
     }
 
-    /// Delivery parent, or `None` when no usable target is configured.
-    ///
-    /// For read-only views: a subscription without a target is still worth
-    /// listing, just without the things that live in its folder. Deliberately
-    /// returns the *parent* — how a work folder is named is the business of the
-    /// media kind's module, not of the workspace.
-    pub(crate) fn delivery_parent_opt(
-        &self,
-        kind: MediaKind,
-        subscription: &Subscription,
-    ) -> Option<PathBuf> {
-        self.delivery_parent(kind, subscription).ok()
-    }
 }
 
 #[derive(Serialize)]
@@ -736,6 +757,8 @@ struct TargetKindView {
     id: &'static str,
     label: &'static str,
     folder_segment: &'static str,
+    /// Whether the subscribe dialog may offer this kind (Podcasts not yet).
+    subscribable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     directory: Option<String>,
 }
@@ -778,6 +801,7 @@ fn build_targets_response() -> TargetsResponse {
                 id: kind.id(),
                 label: kind.label(),
                 folder_segment: kind.folder_segment(),
+                subscribable: kind.subscribable(),
                 directory: settings
                     .default_for(*kind)
                     .map(|dir| dir.display().to_string()),
@@ -811,21 +835,17 @@ fn build_cover_response(query: Option<&str>) -> tauri::http::Response<Vec<u8>> {
     let Ok(ws) = resolve_workspace(None) else {
         return not_found();
     };
-    let loaded = match kind {
-        MediaKind::Manga => crate::core::manga::load_subscription(&ws.store, &id),
-        _ => load_subscription(&ws.store, &id),
-    };
-    let Ok(Some(subscription)) = loaded else {
+    let Ok(Some(subscription)) = load_by_kind(&ws.store, kind, &id) else {
         return not_found();
     };
-    let Ok(parent) = ws.delivery_parent(kind, &subscription) else {
+    let Ok(parent) = current_parent(&ws, kind, &subscription) else {
         return not_found();
     };
-    let cover = match kind {
-        MediaKind::Manga => {
-            manga::manga_cover_path(&parent.join(manga::folder_name(&subscription)))
-        }
-        _ => webnovel::load_novel_cover_path(&webnovel_folder(&parent, &subscription)),
+    let folder = work_folder_in(&parent, kind, &subscription);
+    let cover = if kind.uses_manga_engine() {
+        manga::manga_cover_path(&folder)
+    } else {
+        webnovel::load_novel_cover_path(&folder)
     };
     let Some(path) = cover else {
         return not_found();
@@ -841,6 +861,79 @@ fn build_cover_response(query: Option<&str>) -> tauri::http::Response<Vec<u8>> {
         _ => "image/jpeg",
     };
     http::bytes_response(StatusCode::OK, content_type, body)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RelocateRequest {
+    id: String,
+    /// Media kind id, see `MediaKind::id`.
+    kind: String,
+}
+
+/// Moves a subscription's staged files to where the target chain points.
+///
+/// The counterpart to local staging: chapters kept arriving while the network
+/// share was offline, and this is the one click that carries them over once it
+/// is back — no manual Finder session. Only ever runs on request.
+fn build_relocate_response(body: &[u8]) -> SimpleResponse {
+    let req: RelocateRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
+    };
+    let Some(kind) = MediaKind::from_id(&req.kind) else {
+        return SimpleResponse::error(format!("Unbekannter Medientyp: {}", req.kind));
+    };
+    let ws = match resolve_workspace(None) {
+        Ok(ws) => ws,
+        Err(message) => return SimpleResponse::error(message),
+    };
+    let mut subscription = match load_by_kind(&ws.store, kind, &req.id) {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return SimpleResponse::error("Abo nicht gefunden."),
+        Err(error) => return SimpleResponse::error(error.to_string()),
+    };
+
+    // Das Ziel muss jetzt erreichbar sein — sonst gaebe es nichts zu tun.
+    let desired = match ws.delivery_parent(kind, &subscription) {
+        Ok(parent) => parent,
+        Err(error) => {
+            return SimpleResponse::error(format!("Ziel weiterhin nicht nutzbar: {error}"))
+        }
+    };
+    let Some(current) = subscription.delivered_to.clone().map(PathBuf::from) else {
+        return SimpleResponse::error("Für dieses Abo wurde noch nichts ausgeliefert.");
+    };
+    if current == desired {
+        return SimpleResponse::error("Die Dateien liegen bereits am Ziel.");
+    }
+
+    let from = work_folder_in(&current, kind, &subscription);
+    let to = work_folder_in(&desired, kind, &subscription);
+    if from.exists() {
+        if let Err(error) = fs::create_dir_all(&desired) {
+            return SimpleResponse::error(error.to_string());
+        }
+        if let Err(error) = crate::deliver::mover::move_dir(&from, &to) {
+            return SimpleResponse::error(error.to_string());
+        }
+        debug_log(&format!(
+            "Verschoben: {} -> {}",
+            from.display(),
+            to.display()
+        ));
+    }
+
+    subscription.delivered_to = Some(desired.display().to_string());
+    let saved = if kind.uses_manga_engine() {
+        crate::core::manga::save_subscription(&ws.store, &subscription)
+    } else {
+        save_subscription(&ws.store, &subscription)
+    };
+    match saved {
+        Ok(()) => SimpleResponse::ok(),
+        Err(error) => SimpleResponse::error(error.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -979,6 +1072,42 @@ impl OpenExternalResponse {
     }
 }
 
+/// Loads a subscription from the store its engine uses.
+///
+/// The adult categories share the regular engines, so `hmanga` looks in the
+/// manga store and `hwebnovel` in the novel store.
+fn load_by_kind(store: &Path, kind: MediaKind, id: &str) -> Result<Option<Subscription>> {
+    if kind.uses_manga_engine() {
+        crate::core::manga::load_subscription(store, id)
+    } else {
+        load_subscription(store, id)
+    }
+}
+
+/// The parent directory a subscription's files actually live in right now.
+///
+/// `delivered_to` is the truth when set — files may be staged locally while
+/// the real target is offline. Only without it does the target chain answer.
+fn current_parent(
+    ws: &Workspace,
+    kind: MediaKind,
+    subscription: &Subscription,
+) -> Result<PathBuf> {
+    match subscription.delivered_to.as_ref() {
+        Some(current) => Ok(PathBuf::from(current)),
+        None => ws.delivery_parent(kind, subscription),
+    }
+}
+
+/// The work folder for a subscription, inside `parent`.
+fn work_folder_in(parent: &Path, kind: MediaKind, subscription: &Subscription) -> PathBuf {
+    if kind.uses_manga_engine() {
+        parent.join(manga::folder_name(subscription))
+    } else {
+        webnovel_folder(parent, subscription)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RevealRequest {
@@ -1005,25 +1134,16 @@ fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
         Ok(ws) => ws,
         Err(message) => return OpenExternalResponse::error(message),
     };
-    // Jeder Medientyp hat seinen eigenen Store — ein Manga liegt nie im
-    // Webnovel-Store, die Suche muss dem Typ folgen.
-    let loaded = match kind {
-        MediaKind::Manga => crate::core::manga::load_subscription(&ws.store, &req.id),
-        _ => load_subscription(&ws.store, &req.id),
-    };
-    let subscription = match loaded {
+    let subscription = match load_by_kind(&ws.store, kind, &req.id) {
         Ok(Some(subscription)) => subscription,
         Ok(None) => return OpenExternalResponse::error("Abo nicht gefunden."),
         Err(error) => return OpenExternalResponse::error(error.to_string()),
     };
-    let parent = match ws.delivery_parent(kind, &subscription) {
+    let parent = match current_parent(&ws, kind, &subscription) {
         Ok(parent) => parent,
         Err(error) => return OpenExternalResponse::error(error.to_string()),
     };
-    let folder = match kind {
-        MediaKind::Manga => parent.join(manga::folder_name(&subscription)),
-        _ => webnovel_folder(&parent, &subscription),
-    };
+    let folder = work_folder_in(&parent, kind, &subscription);
     if !folder.is_dir() {
         return OpenExternalResponse::error(
             "Für dieses Abo wurde noch nichts heruntergeladen.".to_string(),

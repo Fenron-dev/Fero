@@ -3,4 +3,5 @@
 
 pub mod manifest;
 pub mod migrate;
+pub mod mover;
 pub mod targets;

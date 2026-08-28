@@ -57,6 +57,8 @@
           <select id="kind-filter" class="input">
             <option value="">Alle Typen</option>
           </select>
+          <button class="action ghost" id="view-list" title="Listenansicht">Liste</button>
+          <button class="action ghost" id="view-grid" title="Rasteransicht mit Covern">Raster</button>
           <button class="action primary" id="add-open">Abo hinzufügen</button>
         </div>
       </header>
@@ -110,7 +112,32 @@
             <button class="action" id="detail-pick-target">Eigenen Ordner wählen</button>
             <button class="action ghost" id="detail-clear-target">Standard verwenden</button>
           </div>
+          <p class="hint" id="detail-relocate-info"></p>
+          <div class="row">
+            <button class="action" id="detail-relocate" hidden>Jetzt zum Ziel verschieben</button>
+          </div>
           <p class="feedback" id="detail-target-feedback"></p>
+        </div>
+
+        <div class="panel">
+          <p class="panel-label">Kategorie &amp; Kapitel-Limit</p>
+          <p class="hint">
+            Die Kategorie bestimmt das Regal und damit den Zielordner. Das Limit
+            deckelt, wie viele Kapitel insgesamt geladen werden — zum
+            Reinschnuppern; später einfach erhöhen oder auf 0 (alle) setzen.
+          </p>
+          <div class="row wrap">
+            <label class="field" style="margin: 0">
+              <span>Kategorie</span>
+              <select id="detail-kind" class="input"></select>
+            </label>
+            <label class="field" style="margin: 0">
+              <span>Kapitel-Limit (0 = alle)</span>
+              <input type="number" id="detail-limit" class="input" min="0" placeholder="alle" />
+            </label>
+            <button class="action" id="detail-kind-save">Speichern</button>
+          </div>
+          <p class="feedback" id="detail-kind-feedback"></p>
         </div>
 
         <div class="panel" id="detail-status-panel">

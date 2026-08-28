@@ -37,16 +37,28 @@ const FALLBACK_DIR_NAME: &str = "Downloads";
 pub enum MediaKind {
     /// Serialized web novels, delivered as EPUB.
     Webnovel,
+    /// Adult web novels — a category of their own so they never mix with the
+    /// regular shelf and get their own delivery target.
+    #[serde(rename = "hwebnovel")]
+    HentaiWebnovel,
     /// Manga and webtoons, delivered as CBZ.
     Manga,
+    /// Adult manga, kept apart for the same reason.
+    #[serde(rename = "hmanga")]
+    HentaiManga,
     /// Podcast episodes, delivered as tagged audio files.
     Podcast,
 }
 
 impl MediaKind {
     /// Every kind, in the order the settings UI should show them.
-    pub const ALL: &'static [MediaKind] =
-        &[MediaKind::Webnovel, MediaKind::Manga, MediaKind::Podcast];
+    pub const ALL: &'static [MediaKind] = &[
+        MediaKind::Webnovel,
+        MediaKind::HentaiWebnovel,
+        MediaKind::Manga,
+        MediaKind::HentaiManga,
+        MediaKind::Podcast,
+    ];
 
     /// Stable identifier used as the settings key and in the HTTP API.
     ///
@@ -54,7 +66,9 @@ impl MediaKind {
     pub fn id(self) -> &'static str {
         match self {
             Self::Webnovel => "webnovel",
+            Self::HentaiWebnovel => "hwebnovel",
             Self::Manga => "manga",
+            Self::HentaiManga => "hmanga",
             Self::Podcast => "podcast",
         }
     }
@@ -64,7 +78,9 @@ impl MediaKind {
     pub fn folder_segment(self) -> &'static str {
         match self {
             Self::Webnovel => "Webnovels",
+            Self::HentaiWebnovel => "H-Webnovels",
             Self::Manga => "Manga",
+            Self::HentaiManga => "H-Manga",
             Self::Podcast => "Podcasts",
         }
     }
@@ -73,7 +89,9 @@ impl MediaKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Webnovel => "Webnovels",
+            Self::HentaiWebnovel => "H/Webnovels",
             Self::Manga => "Manga & Webtoons",
+            Self::HentaiManga => "H/Manga",
             Self::Podcast => "Podcasts",
         }
     }
@@ -81,6 +99,29 @@ impl MediaKind {
     /// Parses an identifier produced by [`MediaKind::id`].
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|kind| kind.id() == id)
+    }
+
+    /// Whether this kind is fetched and packaged by the novel engine.
+    ///
+    /// The adult categories are a shelf decision, not a technical one — an
+    /// adult novel is scraped and packaged exactly like a regular one, only
+    /// its delivery target differs.
+    pub fn uses_novel_engine(self) -> bool {
+        matches!(self, Self::Webnovel | Self::HentaiWebnovel)
+    }
+
+    /// Whether this kind is fetched and packaged by the manga engine.
+    pub fn uses_manga_engine(self) -> bool {
+        matches!(self, Self::Manga | Self::HentaiManga)
+    }
+
+    /// Whether subscriptions of this kind can be created yet.
+    ///
+    /// Podcasts already have a target row in the settings, but no engine —
+    /// offering them in the subscribe dialog would promise something that
+    /// does not happen.
+    pub fn subscribable(self) -> bool {
+        self != Self::Podcast
     }
 }
 
@@ -297,6 +338,12 @@ pub enum TargetResolution {
         suggestion: PathBuf,
         /// Why no target could be used, in German, for the UI.
         reason: String,
+        /// Whether a target *is* configured and merely unreachable right now.
+        ///
+        /// The distinction decides what a check may do: an offline network
+        /// share justifies staging the files locally, a never-configured
+        /// target does not — there the user still has to choose.
+        configured: bool,
     },
 }
 
@@ -339,6 +386,7 @@ pub fn resolve_target(
                 "Das für dieses Abo eingestellte Ziel ist nicht erreichbar: {}",
                 dir.display()
             ),
+            configured: true,
         };
     }
 
@@ -356,6 +404,7 @@ pub fn resolve_target(
                 kind.label(),
                 dir.display()
             ),
+            configured: true,
         };
     }
 
@@ -370,12 +419,14 @@ pub fn resolve_target(
         return TargetResolution::NeedsChoice {
             suggestion,
             reason: format!("Der Ausweichordner ist nicht erreichbar: {fallback}"),
+            configured: true,
         };
     }
 
     TargetResolution::NeedsChoice {
         suggestion,
         reason: format!("Für {} ist noch kein Zielordner festgelegt.", kind.label()),
+        configured: false,
     }
 }
 
@@ -460,7 +511,12 @@ mod tests {
         let resolved = resolve_target(None, MediaKind::Podcast, &TargetSettings::default(), &dir);
 
         match resolved {
-            TargetResolution::NeedsChoice { suggestion, reason } => {
+            TargetResolution::NeedsChoice {
+                suggestion,
+                reason,
+                configured,
+            } => {
+                assert!(!configured, "nothing is configured here");
                 assert_eq!(suggestion, dir.join("Downloads").join("Podcasts"));
                 assert!(
                     reason.contains("Podcasts"),
@@ -482,8 +538,11 @@ mod tests {
         let resolved = resolve_target(Some(offline), MediaKind::Webnovel, &settings, &dir);
 
         match resolved {
-            TargetResolution::NeedsChoice { reason, .. } => {
+            TargetResolution::NeedsChoice {
+                reason, configured, ..
+            } => {
                 assert!(reason.contains("nicht erreichbar"), "got: {reason}");
+                assert!(configured, "an offline share counts as configured");
             }
             other => panic!("expected NeedsChoice, got {other:?}"),
         }

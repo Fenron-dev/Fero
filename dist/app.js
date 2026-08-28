@@ -162,8 +162,16 @@ async function loadSubscriptions() {
   if (problem) status(problem, true);
 
   subscriptions = [
-    ...(novels.subscriptions || []).map((item) => ({ ...item, kind: "webnovel" })),
-    ...(mangas.subscriptions || []).map((item) => ({ ...item, kind: "manga" })),
+    ...(novels.subscriptions || []).map((item) => ({
+      ...item,
+      kind: "webnovel",
+      mediaKind: item.mediaKind || "webnovel",
+    })),
+    ...(mangas.subscriptions || []).map((item) => ({
+      ...item,
+      kind: "manga",
+      mediaKind: item.mediaKind || "manga",
+    })),
   ].sort((a, b) => a.title.localeCompare(b.title, "de"));
 
   $("nav-count-subscriptions").textContent = subscriptions.length || "";
@@ -195,6 +203,26 @@ function statusBadge(status) {
   return el("span", "badge " + entry.tone, entry.text);
 }
 
+/* Kategorie -> Engine. Die H-Kategorien sind eine Regal-Entscheidung, keine
+ * technische: ein H/Manga wird von der Manga-Engine geholt. */
+const engineFor = (mediaKind) =>
+  mediaKind === "manga" || mediaKind === "hmanga" ? "manga" : "webnovel";
+
+/* Cover-URL; der letzte Prueflauf dient als Cache-Brecher, damit ein neues
+ * Cover ankommt, unveraenderte aber aus dem Cache kommen. */
+const coverUrl = (item) =>
+  `${API}/cover?id=${encodeURIComponent(item.id)}&kind=${item.mediaKind}&t=${item.lastCheckUnix || 0}`;
+
+let viewMode = localStorage.getItem("fero.viewMode") || "list";
+
+function setViewMode(mode) {
+  viewMode = mode;
+  localStorage.setItem("fero.viewMode", mode);
+  $("view-list").classList.toggle("is-active", mode === "list");
+  $("view-grid").classList.toggle("is-active", mode === "grid");
+  renderSubscriptions();
+}
+
 function kindLabel(id) {
   const kind = mediaKinds.find((entry) => entry.id === id);
   return kind ? kind.label : id;
@@ -204,7 +232,7 @@ function visibleSubscriptions() {
   const needle = $("filter-input").value.trim().toLowerCase();
   const kind = $("kind-filter").value;
   return subscriptions.filter((item) => {
-    if (kind && item.kind !== kind) return false;
+    if (kind && item.mediaKind !== kind) return false;
     if (!needle) return true;
     return (
       item.title.toLowerCase().includes(needle) ||
@@ -213,10 +241,37 @@ function visibleSubscriptions() {
   });
 }
 
+/* Eine Kachel im Raster: Cover (oder Initiale), Titel darunter — zum Finden
+ * nach dem Bild statt nach dem Namen. */
+function gridTile(item) {
+  const tile = el("button", "tile");
+  tile.type = "button";
+  if (item.hasCover) {
+    const img = el("img");
+    img.src = coverUrl(item);
+    img.loading = "lazy";
+    img.alt = "";
+    tile.appendChild(img);
+  } else {
+    tile.appendChild(el("div", "tile-fallback", item.title.slice(0, 1)));
+  }
+  tile.appendChild(el("div", "tile-title", item.title));
+  tile.appendChild(
+    el(
+      "div",
+      "tile-meta",
+      `${kindLabel(item.mediaKind)} · ${item.downloadedChapters}/${item.knownChapters}`
+    )
+  );
+  tile.addEventListener("click", () => openDetail(item.id));
+  return tile;
+}
+
 function renderSubscriptions() {
   const list = $("subscription-list");
   const empty = $("subscription-empty");
   clear(list);
+  list.className = "cards" + (viewMode === "grid" ? " grid" : "");
 
   const items = visibleSubscriptions();
   if (items.length === 0) {
@@ -228,14 +283,31 @@ function renderSubscriptions() {
   }
   empty.hidden = true;
 
+  if (viewMode === "grid") {
+    for (const item of items) {
+      list.appendChild(gridTile(item));
+    }
+    return;
+  }
+
   for (const item of items) {
     const card = el("button", "card");
     card.type = "button";
 
+    if (item.hasCover) {
+      const thumb = el("img", "card-thumb");
+      thumb.src = coverUrl(item);
+      thumb.loading = "lazy";
+      thumb.alt = "";
+      card.appendChild(thumb);
+    } else {
+      card.appendChild(el("div", "card-thumb fallback", item.title.slice(0, 1)));
+    }
+
     const left = el("div");
     left.appendChild(el("div", "card-title", item.title));
     left.appendChild(
-      el("div", "card-meta", `${kindLabel(item.kind)} · ${item.source}`)
+      el("div", "card-meta", `${kindLabel(item.mediaKind)} · ${item.source}`)
     );
 
     const badges = el("div", "badges");
@@ -265,6 +337,9 @@ function renderSubscriptions() {
   }
 }
 
+$("view-list").addEventListener("click", () => setViewMode("list"));
+$("view-grid").addEventListener("click", () => setViewMode("grid"));
+
 $("filter-input").addEventListener("input", renderSubscriptions);
 $("kind-filter").addEventListener("change", renderSubscriptions);
 
@@ -290,7 +365,7 @@ $("add-submit").addEventListener("click", async () => {
   button.disabled = true;
   setFeedback($("add-feedback"), "Quelle wird gelesen …");
   try {
-    const result = await post(`${kind}/subscribe`, { url });
+    const result = await post(`${engineFor(kind)}/subscribe`, { url, mediaKind: kind });
     if (result.alreadySubscribed) {
       setFeedback($("add-feedback"), "Diese URL ist bereits abonniert.", "error");
     } else {
@@ -324,7 +399,7 @@ function openDetail(id) {
 
   const facts = $("detail-facts");
   clear(facts);
-  fact(facts, "Typ", kindLabel(item.kind));
+  fact(facts, "Typ", kindLabel(item.mediaKind));
   fact(facts, "Quelle", item.source);
   fact(facts, "Autor", item.author);
   fact(facts, "Kapitel", `${item.downloadedChapters} von ${item.knownChapters} geladen`);
@@ -351,12 +426,14 @@ function openDetail(id) {
   }
   if (item.lastError) fact(facts, "Letzter Fehler", item.lastError);
   if (item.ratingExternal) fact(facts, "Bewertung", `${item.ratingExternal} / 5`);
+  if (item.downloadLimit) fact(facts, "Kapitel-Limit", `${item.downloadLimit}`);
+  if (item.deliveredTo) fact(facts, "Dateien liegen in", item.deliveredTo);
 
   const cover = $("detail-cover");
   if (item.hasCover) {
     /* Zeitstempel gegen den Bild-Cache: nach einem Prüflauf kann ein neues
      * Cover liegen, die URL wäre sonst dieselbe. */
-    cover.src = `${API}/cover?id=${encodeURIComponent(item.id)}&kind=${item.kind}&t=${Date.now()}`;
+    cover.src = coverUrl(item);
     cover.hidden = false;
   } else {
     cover.hidden = true;
@@ -377,6 +454,7 @@ function openDetail(id) {
   }
 
   renderDetailTarget(item);
+  fillKindSelect(item);
   setFeedback($("detail-feedback"), "");
   setFeedback($("detail-target-feedback"), "");
   setFeedback($("detail-login-feedback"), "");
@@ -395,9 +473,23 @@ function renderDetailTarget(item) {
   if (item.targetDir) {
     node.textContent = `Eigener Ordner: ${item.targetDir}`;
   } else {
-    node.textContent = `Standard für ${kindLabel(item.kind)} wird verwendet.`;
+    node.textContent = `Standard für ${kindLabel(item.mediaKind)} wird verwendet.`;
   }
   $("detail-clear-target").disabled = !item.targetDir;
+
+  /* Liegen die Dateien woanders, als die Zielkette zeigt — lokal gesammelt,
+   * weil das Netzziel offline war, oder die Kategorie hat gewechselt — gibt es
+   * genau hier den einen Knopf, der sie hintraegt. */
+  const info = $("detail-relocate-info");
+  const button = $("detail-relocate");
+  if (item.needsRelocation) {
+    info.textContent =
+      `Die Dateien liegen derzeit in ${item.deliveredTo} — das aktuelle Ziel ist ein anderer Ordner.`;
+    button.hidden = false;
+  } else {
+    info.textContent = "";
+    button.hidden = true;
+  }
 }
 
 function currentItem() {
@@ -419,6 +511,62 @@ $("detail-status-save").addEventListener("click", async () => {
       "Gespeichert. Der Status wird beim nächsten Prüflauf gelesen.",
       "ok"
     );
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+});
+
+/* Kategorie und Kapitel-Limit. Die Kategorie-Auswahl bleibt in der Engine des
+ * Abos — aus einem Manga wird kein Webnovel, nur das Regal wechselt. */
+function fillKindSelect(item) {
+  const select = $("detail-kind");
+  clear(select);
+  for (const kind of mediaKinds) {
+    if (kind.subscribable && engineFor(kind.id) === item.kind) {
+      select.appendChild(new Option(kind.label, kind.id));
+    }
+  }
+  select.value = item.mediaKind;
+  $("detail-limit").value = item.downloadLimit || "";
+}
+
+$("detail-kind-save").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-kind-feedback");
+  try {
+    await post(`${item.kind}/update`, {
+      id: item.id,
+      mediaKind: $("detail-kind").value,
+      downloadLimit: Number($("detail-limit").value) || 0,
+    });
+    await loadSubscriptions();
+    const updated = currentItem();
+    if (updated) openDetail(updated.id);
+    setFeedback(node, "Gespeichert.", "ok");
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+});
+
+$("detail-relocate").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-target-feedback");
+  const ok = await confirmAction(
+    `Dateien von „${item.title}" jetzt zum Ziel verschieben?\n\n` +
+      `Von: ${item.deliveredTo}\n` +
+      "Das kann bei vielen Kapiteln einen Moment dauern.",
+    "Verschieben"
+  );
+  if (!ok) return;
+  try {
+    setFeedback(node, "Wird verschoben …");
+    await post("relocate", { id: item.id, kind: item.mediaKind });
+    await loadSubscriptions();
+    const updated = currentItem();
+    if (updated) openDetail(updated.id);
+    setFeedback(node, "Verschoben — die Dateien liegen jetzt am Ziel.", "ok");
   } catch (error) {
     setFeedback(node, error.message, "error");
   }
@@ -575,7 +723,7 @@ $("detail-open").addEventListener("click", async () => {
   const item = currentItem();
   if (!item) return;
   try {
-    await post("reveal", { id: item.id, kind: item.kind });
+    await post("reveal", { id: item.id, kind: item.mediaKind });
   } catch (error) {
     setFeedback($("detail-feedback"), error.message, "error");
   }
@@ -805,7 +953,9 @@ function syncKindSelectors() {
   clear(filterSelect);
   filterSelect.appendChild(new Option("Alle Typen", ""));
   for (const kind of mediaKinds) {
-    addSelect.appendChild(new Option(kind.label, kind.id));
+    if (kind.subscribable) {
+      addSelect.appendChild(new Option(kind.label, kind.id));
+    }
     filterSelect.appendChild(new Option(kind.label, kind.id));
   }
   filterSelect.value = previousFilter;
@@ -1004,6 +1154,8 @@ $("log-open").addEventListener("click", async () => {
 // ── Start ────────────────────────────────────────────────────────────────
 
 (async function start() {
+  $("view-list").classList.toggle("is-active", viewMode === "list");
+  $("view-grid").classList.toggle("is-active", viewMode === "grid");
   // Zuerst die Ziele: sie liefern die Medientypen, aus denen sich die
   // Auswahlfelder aufbauen.
   await loadTargets();

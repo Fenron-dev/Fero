@@ -218,6 +218,16 @@ pub(crate) struct MangaSubscriptionSummary {
     /// Delivery target set for this subscription alone, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     target_dir: Option<String>,
+    /// Category this subscription belongs to.
+    media_kind: MediaKind,
+    /// Total chapter cap, when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_limit: Option<u32>,
+    /// Where the files currently live, when anything was delivered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivered_to: Option<String>,
+    /// True when the files sit somewhere else than the target chain points.
+    needs_relocation: bool,
     /// Whether a cached cover exists in the series folder.
     has_cover: bool,
     completed: bool,
@@ -234,10 +244,22 @@ pub(crate) struct MangaSubscriptionSummary {
 impl MangaSubscriptionSummary {
     /// Builds the summary. `work_dir` is `None` when no target is configured
     /// yet — the subscription is still listed, just without a cover.
-    fn from_subscription(subscription: &Subscription, work_dir: Option<&Path>) -> Self {
-        let has_cover = work_dir
-            .map(|dir| manga_cover_path(dir).is_some())
+    fn from_subscription(subscription: &Subscription, ws: &Workspace) -> Self {
+        let kind = subscription_kind(subscription);
+        let desired = ws.delivery_parent(kind, subscription).ok();
+        let current = subscription
+            .delivered_to
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| desired.clone());
+        let has_cover = current
+            .as_ref()
+            .map(|parent| manga_cover_path(&manga_folder(parent, subscription)).is_some())
             .unwrap_or(false);
+        let needs_relocation = matches!(
+            (subscription.delivered_to.as_deref(), desired.as_ref()),
+            (Some(now), Some(target)) if Path::new(now) != target.as_path()
+        );
         Self {
             id: subscription.id.clone(),
             url: subscription.url.clone(),
@@ -251,6 +273,10 @@ impl MangaSubscriptionSummary {
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
             target_dir: subscription.target_dir.clone(),
+            media_kind: kind,
+            download_limit: subscription.download_limit,
+            delivered_to: subscription.delivered_to.clone(),
+            needs_relocation,
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
@@ -294,10 +320,7 @@ pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    let work_dir = ws
-                        .delivery_parent_opt(MediaKind::Manga, subscription)
-                        .map(|parent| manga_folder(&parent, subscription));
-                    MangaSubscriptionSummary::from_subscription(subscription, work_dir.as_deref())
+                    MangaSubscriptionSummary::from_subscription(subscription, &ws)
                 })
                 .collect(),
             error: None,
@@ -317,6 +340,9 @@ pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
 #[serde(rename_all = "camelCase")]
 struct SubscribeRequest {
     url: String,
+    /// Category the new subscription belongs to (`manga` or `hmanga`).
+    #[serde(default)]
+    media_kind: Option<String>,
     #[serde(default)]
     root: Option<String>,
 }
@@ -367,12 +393,7 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
     match load_subscription(&ws.store, &id) {
         Ok(Some(existing)) => {
             return MangaSubscribeResponse {
-                subscription: Some(MangaSubscriptionSummary::from_subscription(
-                    &existing,
-                    ws.delivery_parent_opt(MediaKind::Manga, &existing)
-                        .map(|parent| manga_folder(&parent, &existing))
-                        .as_deref(),
-                )),
+                subscription: Some(MangaSubscriptionSummary::from_subscription(&existing, &ws)),
                 already_subscribed: true,
                 error: None,
             }
@@ -408,6 +429,11 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
     let mut subscription = Subscription::new(url, source.id(), info.title.clone());
     // Pin the folder now: the title may change upstream later, and two series
     // can sanitize to the same segment.
+    subscription.media_kind = req
+        .media_kind
+        .as_deref()
+        .and_then(MediaKind::from_id)
+        .filter(|kind| kind.uses_manga_engine());
     subscription.folder_name = Some(unique_manga_folder_name(&ws, &subscription));
     apply_series_info(&mut subscription, &info);
     subscription.known_chapters = info
@@ -421,9 +447,7 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         Ok(()) => MangaSubscribeResponse {
             subscription: Some(MangaSubscriptionSummary::from_subscription(
                 &subscription,
-                ws.delivery_parent_opt(MediaKind::Manga, &subscription)
-                    .map(|parent| manga_folder(&parent, &subscription))
-                    .as_deref(),
+                &ws,
             )),
             already_subscribed: false,
             error: None,
@@ -511,7 +535,7 @@ pub(crate) fn build_unsubscribe_response(body: &[u8]) -> MangaSimpleResponse {
     };
 
     if !req.keep_files {
-        let parent = match ws.delivery_parent(MediaKind::Manga, &subscription) {
+        let parent = match current_parent(&ws, subscription_kind(&subscription), &subscription) {
             Ok(parent) => parent,
             Err(error) => return MangaSimpleResponse::error(error.to_string()),
         };
@@ -561,10 +585,7 @@ pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
             subscriptions: subscriptions
                 .iter()
                 .map(|subscription| {
-                    let work_dir = ws
-                        .delivery_parent_opt(MediaKind::Manga, subscription)
-                        .map(|parent| manga_folder(&parent, subscription));
-                    MangaSubscriptionSummary::from_subscription(subscription, work_dir.as_deref())
+                    MangaSubscriptionSummary::from_subscription(subscription, &ws)
                 })
                 .collect(),
             error: None,
@@ -601,7 +622,7 @@ pub(crate) fn build_restore_response(body: &[u8]) -> MangaSimpleResponse {
     };
 
     // Bring the files back too, when the delete moved them aside.
-    let parent = match ws.delivery_parent(MediaKind::Manga, &subscription) {
+    let parent = match current_parent(&ws, subscription_kind(&subscription), &subscription) {
         Ok(parent) => parent,
         Err(error) => return MangaSimpleResponse::error(error.to_string()),
     };
@@ -639,7 +660,7 @@ pub(crate) fn build_purge_response(body: &[u8]) -> MangaSimpleResponse {
         return MangaSimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let Ok(parent) = ws.delivery_parent(MediaKind::Manga, &subscription) else {
+        let Ok(parent) = current_parent(&ws, subscription_kind(&subscription), &subscription) else {
             return MangaSimpleResponse::error(
                 "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
             );
@@ -672,6 +693,12 @@ struct UpdateRequest {
     target_dir: Option<String>,
     #[serde(default)]
     clear_target_dir: bool,
+    /// New total chapter cap; zero lifts the limit.
+    #[serde(default)]
+    download_limit: Option<u32>,
+    /// New category (`manga` or `hmanga`).
+    #[serde(default)]
+    media_kind: Option<String>,
     #[serde(default)]
     completed: Option<bool>,
     #[serde(default)]
@@ -710,6 +737,14 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
         subscription.target_dir = None;
     } else if let Some(target) = req.target_dir {
         subscription.target_dir = Some(target);
+    }
+    if let Some(limit) = req.download_limit {
+        subscription.download_limit = (limit > 0).then_some(limit);
+    }
+    if let Some(kind) = req.media_kind.as_deref().and_then(MediaKind::from_id) {
+        if kind.uses_manga_engine() {
+            subscription.media_kind = Some(kind);
+        }
     }
 
     match save_subscription(&ws.store, &subscription) {
@@ -876,6 +911,14 @@ pub(crate) fn build_job_response(query: Option<&str>) -> MangaJobResponse {
 ///
 /// Per-subscription failures are recorded in that subscription's `last_error`
 /// and the run continues; only store failures abort the whole job.
+/// Category of a subscription handled by this engine.
+fn subscription_kind(subscription: &Subscription) -> MediaKind {
+    subscription
+        .media_kind
+        .filter(|kind| kind.uses_manga_engine())
+        .unwrap_or(MediaKind::Manga)
+}
+
 fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<String> {
     let system_dir = &ws.store;
     let all = list_subscriptions(system_dir)?;
@@ -979,7 +1022,22 @@ fn check_one(
         }
     }
 
-    let parent = ws.delivery_parent(MediaKind::Manga, subscription)?;
+    // Wo die Dateien wirklich liegen, hat Vorrang; siehe Webnovel-Engine.
+    let kind = subscription_kind(subscription);
+    let parent = match subscription.delivered_to.as_ref() {
+        Some(current) => PathBuf::from(current),
+        None => {
+            let (parent, staged) = ws.delivery_parent_or_staging(kind, subscription)?;
+            if staged {
+                update_job(job_id, |status| {
+                    status.message =
+                        Some("Ziel nicht erreichbar — es wird lokal gesammelt.".to_string());
+                });
+            }
+            parent
+        }
+    };
+    subscription.delivered_to = Some(parent.display().to_string());
     let series_dir = manga_folder(&parent, subscription);
     fs::create_dir_all(&series_dir).map_err(FeroError::from)?;
     ensure_cover(client, subscription, &series_dir);
@@ -991,6 +1049,18 @@ fn check_one(
         .filter(|(_, chapter)| chapter.needs_fetch())
         .map(|(position, _)| position)
         .collect();
+    // Gesamtbestand deckeln (zum Reinschnuppern), zusaetzlich zum Lauf-Limit.
+    if let Some(limit) = subscription.download_limit {
+        let already = subscription
+            .known_chapters
+            .iter()
+            .filter(|chapter| chapter.downloaded_at_unix.is_some())
+            .count();
+        let allowed = (limit as usize).saturating_sub(already);
+        if pending.len() > allowed {
+            pending.truncate(allowed);
+        }
+    }
     if let Some(limit) = options.max_chapters {
         pending.truncate(limit);
     }
@@ -1310,7 +1380,7 @@ fn record_delivery(
     let mut record = manifest::load_or_new(
         series_dir,
         &subscription.id,
-        MediaKind::Manga,
+        subscription_kind(subscription),
         &subscription.url,
         &subscription.title,
     );
