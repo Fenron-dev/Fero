@@ -1038,6 +1038,34 @@ function updateTargetHint(data) {
     : "Noch kein Zielordner festgelegt — siehe Einstellungen.";
 }
 
+// ── Übernahme ────────────────────────────────────────────────────────────
+
+$("import-scan").addEventListener("click", async () => {
+  const node = $("import-feedback");
+  const button = $("import-scan");
+  button.disabled = true;
+  setFeedback(node, "Durchsuche Zielordner …");
+  try {
+    const result = await post("import", {});
+    const parts = [];
+    if (result.imported.length) {
+      parts.push(`${result.imported.length} übernommen: ${result.imported.join(", ")}`);
+    }
+    if (result.skipped) parts.push(`${result.skipped} bereits vorhanden`);
+    if (result.unmatchedChapters) {
+      parts.push(
+        `${result.unmatchedChapters} Kapitel ohne Wiedererkennung — sie werden beim nächsten Prüflauf neu geladen`
+      );
+    }
+    setFeedback(node, parts.length ? parts.join(" · ") : "Nichts gefunden.", "ok");
+    await loadSubscriptions();
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // ── Zeitplan ─────────────────────────────────────────────────────────────
 
 async function loadSchedule() {

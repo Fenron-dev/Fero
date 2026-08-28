@@ -46,6 +46,13 @@ pub struct ChapterRecord {
     pub index: u32,
     /// Chapter title as reported by the source.
     pub title: String,
+    /// Chapter URL — the identity another Fero instance needs to recognise
+    /// this chapter in the ToC instead of downloading it again.
+    ///
+    /// Optional because manifests written before this field exist; those
+    /// chapters cannot be matched and are treated as unknown on import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     /// Unix timestamp of the download.
     pub downloaded_at_unix: u64,
 }

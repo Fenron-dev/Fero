@@ -28,6 +28,7 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             APP_JS,
         ),
         "/styles.css" => response(StatusCode::OK, "text/css; charset=utf-8", STYLES_CSS),
+        "/api/import" => json_outcome(&build_import_response(), StatusCode::BAD_REQUEST),
         "/api/relocate" => json_outcome(
             &build_relocate_response(request.body()),
             StatusCode::BAD_REQUEST,

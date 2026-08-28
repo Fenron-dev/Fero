@@ -57,6 +57,7 @@ const PROTOCOL_SCHEME: &str = "fero";
 // Die beiden Fenster-Antworten deklarieren ihr Outcome in browser.rs.
 impl_outcome!(
     AniListSearchResponse,
+    ImportResponse,
     ScheduleResponse,
     SelectFolderResponse,
     OpenExternalResponse,
@@ -860,6 +861,182 @@ fn build_cover_response(query: Option<&str>) -> tauri::http::Response<Vec<u8>> {
         _ => "image/jpeg",
     };
     http::bytes_response(StatusCode::OK, content_type, body)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportResponse {
+    /// Titles taken over from found manifests.
+    imported: Vec<String>,
+    /// Works that were already subscribed here.
+    skipped: usize,
+    /// Chapters that could not be matched (manifest predates chapter URLs)
+    /// and will be downloaded again on the next check.
+    unmatched_chapters: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Takes over works another Fero instance delivered into the target folders.
+///
+/// This is what makes the folder structure the shared truth between machines:
+/// every work folder carries a `fero.info.json` with source URL, category and
+/// the chapter list. Scanning the configured targets turns those back into
+/// subscriptions — pinned to the existing folder, with delivered chapters
+/// marked so nothing is downloaded twice. Everything machine-specific (paths,
+/// sessions, the cache) deliberately stays local.
+fn build_import_response() -> ImportResponse {
+    let fail = |message: String| ImportResponse {
+        imported: Vec::new(),
+        skipped: 0,
+        unmatched_chapters: 0,
+        error: Some(message),
+    };
+    let ws = match resolve_workspace(None) {
+        Ok(ws) => ws,
+        Err(message) => return fail(message),
+    };
+
+    // Alle Orte, an denen Werke liegen koennen: Standard je Kategorie, der
+    // Ausweichordner und die lokale Staging-Ablage.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for kind in MediaKind::ALL {
+        if let Some(dir) = ws.targets.default_for(*kind) {
+            roots.push(dir);
+        }
+        if let Some(fallback) = ws.targets.fallback.as_ref() {
+            roots.push(Path::new(fallback).join(kind.folder_segment()));
+        }
+        roots.push(ws.staging_parent(*kind));
+    }
+    roots.sort();
+    roots.dedup();
+
+    let mut imported = Vec::new();
+    let mut skipped = 0usize;
+    let mut unmatched = 0usize;
+
+    for root in roots {
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let work_dir = entry.path();
+            if !work_dir.is_dir() {
+                continue;
+            }
+            let Some(record) = manifest::load(&work_dir) else {
+                continue;
+            };
+            match adopt_manifest(&ws, &root, &work_dir, &record) {
+                Ok(Adoption::Imported { title, dropped }) => {
+                    unmatched += dropped;
+                    imported.push(title);
+                }
+                Ok(Adoption::AlreadyKnown) => skipped += 1,
+                Err(error) => {
+                    debug_log(&format!(
+                        "Import: {} uebersprungen — {error}",
+                        work_dir.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    debug_log(&format!(
+        "Import: {} uebernommen, {skipped} bereits vorhanden, {unmatched} Kapitel ohne URL",
+        imported.len()
+    ));
+    ImportResponse {
+        imported,
+        skipped,
+        unmatched_chapters: unmatched,
+        error: None,
+    }
+}
+
+/// Outcome of adopting one manifest.
+enum Adoption {
+    Imported { title: String, dropped: usize },
+    AlreadyKnown,
+}
+
+/// Turns one work folder's manifest back into a subscription.
+fn adopt_manifest(
+    ws: &Workspace,
+    parent: &Path,
+    work_dir: &Path,
+    record: &manifest::WorkManifest,
+) -> Result<Adoption> {
+    let kind = record.media_kind;
+    let manga_like = kind.uses_manga_engine();
+
+    // Die Id wird aus der URL neu abgeleitet statt dem Manifest geglaubt —
+    // sie ist gleichzeitig der Dateiname im Store.
+    let id = crate::core::subscription::subscription_id(&record.source_url);
+    let existing = if manga_like {
+        crate::core::manga::load_subscription(&ws.store, &id)?
+    } else {
+        load_subscription(&ws.store, &id)?
+    };
+    if existing.is_some() {
+        return Ok(Adoption::AlreadyKnown);
+    }
+
+    let source_id = if manga_like {
+        crate::api::manga::detect_source(&record.source_url)
+            .map(|source| source.id())
+            .ok_or_else(|| {
+                FeroError::ExternalApi(format!(
+                    "keine Manga-Quelle fuer {} erkannt",
+                    record.source_url
+                ))
+            })?
+    } else {
+        detect_source(&record.source_url).id()
+    };
+
+    let mut subscription =
+        Subscription::new(record.source_url.clone(), source_id, record.title.clone());
+    subscription.media_kind = Some(kind);
+    subscription.series_status = record.status;
+    // An den vorhandenen Ordner nageln — er heisst, wie die andere Instanz
+    // ihn genannt hat, und die Dateien liegen schon darin.
+    if let Some(name) = work_dir.file_name().and_then(|name| name.to_str()) {
+        subscription.folder_name = Some(name.to_string());
+    }
+    subscription.delivered_to = Some(parent.display().to_string());
+
+    // Fertig ausgelieferte Kapitel als geladen uebernehmen. Ohne URL ist ein
+    // Kapitel im ToC nicht wiederzuerkennen und wuerde den Abgleich
+    // verdoppeln — solche Eintraege fallen weg und werden neu geladen.
+    let mut dropped = 0usize;
+    for chapter in &record.chapters {
+        let Some(url) = chapter.url.clone() else {
+            dropped += 1;
+            continue;
+        };
+        subscription.known_chapters.push(KnownChapter {
+            index: chapter.index,
+            title: chapter.title.clone(),
+            url,
+            volume: None,
+            page_count: None,
+            downloaded_at_unix: Some(chapter.downloaded_at_unix),
+            placeholder: false,
+        });
+    }
+
+    if manga_like {
+        crate::core::manga::save_subscription(&ws.store, &subscription)?;
+    } else {
+        save_subscription(&ws.store, &subscription)?;
+    }
+    Ok(Adoption::Imported {
+        title: record.title.clone(),
+        dropped,
+    })
 }
 
 #[derive(Deserialize)]

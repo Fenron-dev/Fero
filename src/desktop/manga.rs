@@ -1135,6 +1135,8 @@ fn check_one(
             subscription.title
         ));
     }
+    refresh_manifest(&series_dir, subscription);
+
     if let Some(error) = fetch_error {
         return Err(error);
     }
@@ -1368,12 +1370,8 @@ fn pad_chapter_number(number: &str) -> Option<String> {
 ///
 /// Replaces the former `.fero.yaml` sidecar; descriptive metadata belongs in
 /// the CBZ's `ComicInfo.xml`, where any reader can see it.
-fn record_delivery(
-    series_dir: &Path,
-    subscription: &Subscription,
-    file_name: &str,
-    index: u32,
-) -> Result<()> {
+/// The manifest bookkeeping shared by every write and by the refresh.
+fn manifest_bookkeeping(series_dir: &Path, subscription: &Subscription) -> manifest::WorkManifest {
     let mut record = manifest::load_or_new(
         series_dir,
         &subscription.id,
@@ -1390,7 +1388,6 @@ fn record_delivery(
         SeriesStatus::Ongoing
     };
     record.last_check_unix = Some(unix_now());
-    record.record_file(file_name, Some((index, index)), unix_now());
     record.chapters = subscription
         .known_chapters
         .iter()
@@ -1398,10 +1395,34 @@ fn record_delivery(
         .map(|chapter| manifest::ChapterRecord {
             index: chapter.index,
             title: chapter.title.clone(),
+            url: Some(chapter.url.clone()),
             downloaded_at_unix: chapter.downloaded_at_unix.unwrap_or_default(),
         })
         .collect();
+    record
+}
+
+fn record_delivery(
+    series_dir: &Path,
+    subscription: &Subscription,
+    file_name: &str,
+    index: u32,
+) -> Result<()> {
+    let mut record = manifest_bookkeeping(series_dir, subscription);
+    record.record_file(file_name, Some((index, index)), unix_now());
     manifest::save(series_dir, &record)
+}
+
+/// Keeps the manifest current even when no file was written; see the webnovel
+/// counterpart for why.
+fn refresh_manifest(series_dir: &Path, subscription: &Subscription) {
+    if !series_dir.is_dir() {
+        return;
+    }
+    let record = manifest_bookkeeping(series_dir, subscription);
+    if let Err(error) = manifest::save(series_dir, &record) {
+        debug_log(&format!("Manifest nicht aktualisiert: {error}"));
+    }
 }
 
 // ---------------------------------------------------------------------------

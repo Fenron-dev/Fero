@@ -208,6 +208,19 @@
       </div>
 
       <div class="panel">
+        <p class="panel-label">Übernahme von anderen Fero-Instanzen</p>
+        <p class="hint">
+          Jeder Werkordner trägt eine <span class="mono">fero.info.json</span> mit
+          Quelle, Kategorie und Kapitelliste. Der Scan durchsucht die unten
+          eingestellten Zielordner und macht daraus wieder Abos — bereits
+          geladene Kapitel werden erkannt und nicht erneut geladen. Zuerst also
+          die Zielordner setzen, dann scannen.
+        </p>
+        <button class="action" id="import-scan">Zielordner nach Abos durchsuchen</button>
+        <p class="feedback" id="import-feedback"></p>
+      </div>
+
+      <div class="panel">
         <p class="panel-label">Zielordner pro Medientyp</p>
         <p class="hint">
           Ein hier gesetzter Ordner <em>ist</em> der Medienordner — es wird kein weiteres

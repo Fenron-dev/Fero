@@ -1385,6 +1385,8 @@ fn check_one_subscription(
         ));
     }
 
+    refresh_manifest(&novel_dir, subscription);
+
     if let Some(error) = fetch_error {
         return Err(error);
     }
@@ -1722,7 +1724,21 @@ fn build_blocks(novel_dir: &Path, cache_dir: &Path, subscription: &Subscription)
             continue;
         }
 
-        let chapters = load_cached_chapters(cache_dir, &file.chapters)?;
+        // Nach einer Uebernahme von einer anderen Instanz ist der lokale
+        // Zwischenspeicher leer, die Blockdateien liegen aber schon am Ziel.
+        // Ein Block, dessen Kapitel hier fehlen, wird uebersprungen statt den
+        // ganzen Lauf abzubrechen — der Cache ist durch erneutes Laden
+        // wiederherstellbar, die ausgelieferte Datei ist es nicht.
+        let chapters = match load_cached_chapters(cache_dir, &file.chapters) {
+            Ok(chapters) => chapters,
+            Err(error) => {
+                debug_log(&format!(
+                    "batch: {} uebersprungen — Zwischenspeicher unvollstaendig ({error})",
+                    file.name
+                ));
+                continue;
+            }
+        };
         let first = file.chapters.first().copied().unwrap_or(0);
         let last = file.chapters.last().copied().unwrap_or(0);
         let meta = EpubMeta {
@@ -1808,12 +1824,9 @@ fn build_complete_edition(
 ///
 /// Replaces the former `.fero.yaml` sidecar. Descriptive metadata is not
 /// duplicated here — it goes into the EPUB's OPF, where any reader can see it.
-pub(super) fn record_delivery(
-    work_dir: &Path,
-    subscription: &Subscription,
-    file_name: &str,
-    chapter_range: Option<(u32, u32)>,
-) -> Result<()> {
+/// The manifest bookkeeping shared by every write and by the refresh:
+/// title, status, last check and the chapter list with URLs.
+fn manifest_bookkeeping(work_dir: &Path, subscription: &Subscription) -> manifest::WorkManifest {
     let mut record = manifest::load_or_new(
         work_dir,
         &subscription.id,
@@ -1831,7 +1844,6 @@ pub(super) fn record_delivery(
         known => known,
     };
     record.last_check_unix = Some(unix_now());
-    record.record_file(file_name, chapter_range, unix_now());
     record.chapters = subscription
         .known_chapters
         .iter()
@@ -1839,10 +1851,36 @@ pub(super) fn record_delivery(
         .map(|chapter| manifest::ChapterRecord {
             index: chapter.index,
             title: chapter.title.clone(),
+            url: Some(chapter.url.clone()),
             downloaded_at_unix: chapter.downloaded_at_unix.unwrap_or_default(),
         })
         .collect();
+    record
+}
+
+pub(super) fn record_delivery(
+    work_dir: &Path,
+    subscription: &Subscription,
+    file_name: &str,
+    chapter_range: Option<(u32, u32)>,
+) -> Result<()> {
+    let mut record = manifest_bookkeeping(work_dir, subscription);
+    record.record_file(file_name, chapter_range, unix_now());
     manifest::save(work_dir, &record)
+}
+
+/// Keeps the manifest current even when no file was written.
+///
+/// The manifest is what lets another Fero instance take over a work folder —
+/// it must not go stale just because a run found nothing new.
+fn refresh_manifest(work_dir: &Path, subscription: &Subscription) {
+    if !work_dir.is_dir() {
+        return;
+    }
+    let record = manifest_bookkeeping(work_dir, subscription);
+    if let Err(error) = manifest::save(work_dir, &record) {
+        debug_log(&format!("Manifest nicht aktualisiert: {error}"));
+    }
 }
 
 /// Opens an external web link in the system browser.
