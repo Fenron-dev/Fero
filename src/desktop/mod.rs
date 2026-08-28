@@ -570,7 +570,6 @@ impl Workspace {
         }
         Ok(self.store.join("cache").join(subscription_id))
     }
-
 }
 
 #[derive(Serialize)]
@@ -1088,11 +1087,7 @@ fn load_by_kind(store: &Path, kind: MediaKind, id: &str) -> Result<Option<Subscr
 ///
 /// `delivered_to` is the truth when set — files may be staged locally while
 /// the real target is offline. Only without it does the target chain answer.
-fn current_parent(
-    ws: &Workspace,
-    kind: MediaKind,
-    subscription: &Subscription,
-) -> Result<PathBuf> {
+fn current_parent(ws: &Workspace, kind: MediaKind, subscription: &Subscription) -> Result<PathBuf> {
     match subscription.delivered_to.as_ref() {
         Some(current) => Ok(PathBuf::from(current)),
         None => ws.delivery_parent(kind, subscription),

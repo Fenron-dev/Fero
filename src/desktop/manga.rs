@@ -319,9 +319,7 @@ pub(crate) fn build_list_response(query: Option<&str>) -> MangaListResponse {
         Ok(subscriptions) => MangaListResponse {
             subscriptions: subscriptions
                 .iter()
-                .map(|subscription| {
-                    MangaSubscriptionSummary::from_subscription(subscription, &ws)
-                })
+                .map(|subscription| MangaSubscriptionSummary::from_subscription(subscription, &ws))
                 .collect(),
             error: None,
         },
@@ -584,9 +582,7 @@ pub(crate) fn build_trash_response(query: Option<&str>) -> MangaTrashResponse {
         Ok(subscriptions) => MangaTrashResponse {
             subscriptions: subscriptions
                 .iter()
-                .map(|subscription| {
-                    MangaSubscriptionSummary::from_subscription(subscription, &ws)
-                })
+                .map(|subscription| MangaSubscriptionSummary::from_subscription(subscription, &ws))
                 .collect(),
             error: None,
         },
@@ -660,7 +656,8 @@ pub(crate) fn build_purge_response(body: &[u8]) -> MangaSimpleResponse {
         return MangaSimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let Ok(parent) = current_parent(&ws, subscription_kind(&subscription), &subscription) else {
+        let Ok(parent) = current_parent(&ws, subscription_kind(&subscription), &subscription)
+        else {
             return MangaSimpleResponse::error(
                 "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
             );

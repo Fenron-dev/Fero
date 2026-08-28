@@ -633,7 +633,8 @@ pub(super) fn build_webnovel_purge_response(body: &[u8]) -> SimpleResponse {
         return SimpleResponse::error(error.to_string());
     }
     if let Some(subscription) = trashed {
-        let Ok(parent) = current_parent(&ws, subscription_kind(&subscription), &subscription) else {
+        let Ok(parent) = current_parent(&ws, subscription_kind(&subscription), &subscription)
+        else {
             return SimpleResponse::error(
                 "Kein Zielordner festgelegt — die Dateien lassen sich nicht finden.",
             );
