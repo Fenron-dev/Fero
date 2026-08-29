@@ -232,7 +232,7 @@ fn series_status(html: &Html) -> Option<String> {
     // the last entry rather than the first.
     let any = Selector::parse(".post-status .summary-content").ok()?;
     html.select(&any)
-        .last()
+        .next_back()
         .map(|node| tidy_text(&node.text().collect::<String>()))
         .filter(|text| !text.is_empty())
 }

@@ -1348,10 +1348,11 @@ impl AniListNovelMetadata {
     fn from_raw(raw: AniListNovelRaw) -> Self {
         let mut titles = Vec::new();
         if let Some(title) = raw.title.as_ref() {
-            for variant in [&title.english, &title.romaji, &title.native] {
-                if let Some(text) = variant {
-                    titles.push(text.clone());
-                }
+            for text in [&title.english, &title.romaji, &title.native]
+                .into_iter()
+                .flatten()
+            {
+                titles.push(text.clone());
             }
         }
         titles.extend(raw.synonyms.iter().cloned());
