@@ -33,6 +33,7 @@ pub mod fanfox;
 pub mod madara;
 pub mod mangatown;
 pub mod packed;
+pub mod status;
 pub mod themesia;
 pub mod webtoons;
 

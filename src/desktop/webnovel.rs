@@ -174,8 +174,12 @@ struct WebnovelSubscriptionSummary {
     /// Delivery target set for this subscription alone, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     target_dir: Option<String>,
-    /// Life-cycle status as last read from the status source.
+    /// The status that applies, hand setting first — what the badge shows.
     series_status: SeriesStatus,
+    /// The hand setting itself, so the control can show what is set rather
+    /// than what happens to be true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_override: Option<SeriesStatus>,
     /// Whether that status is one the user should be told about unprompted.
     needs_attention: bool,
     /// UNIX timestamp of the last status check.
@@ -248,8 +252,9 @@ impl WebnovelSubscriptionSummary {
             anilist_url: subscription.anilist_url.clone(),
             rating_external: subscription.rating_external,
             target_dir: subscription.target_dir.clone(),
-            series_status: subscription.series_status,
-            needs_attention: subscription.series_status.needs_attention(),
+            series_status: subscription.effective_status(),
+            status_override: subscription.status_override,
+            needs_attention: subscription.effective_status().needs_attention(),
             status_checked_at: subscription.status_checked_at,
             translation_done: subscription.translation_done,
             media_kind: kind,
@@ -666,6 +671,13 @@ struct WebnovelUpdateRequest {
     /// because an empty URL is meaningless and unambiguous.
     #[serde(default)]
     status_source_url: Option<String>,
+    /// Life-cycle status set by hand. `"auto"` hands the decision back to the
+    /// status source; every other value must be a known status id.
+    ///
+    /// A string rather than a nullable status plus a clearing flag: `"auto"`
+    /// is what the dropdown offers, and it says exactly what it does.
+    #[serde(default)]
+    status_override: Option<String>,
     /// New total chapter cap; zero lifts the limit.
     #[serde(default)]
     download_limit: Option<u32>,
@@ -698,6 +710,18 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
         Err(error) => return SimpleResponse::error(error.to_string()),
     };
 
+    if let Some(choice) = req.status_override.as_deref() {
+        match choice {
+            "auto" | "" => subscription.status_override = None,
+            id => match SeriesStatus::from_id(id) {
+                Some(status) => subscription.status_override = Some(status),
+                None => return SimpleResponse::error(format!("Unbekannter Status: {id}")),
+            },
+        }
+        // Zurueck auf Automatik heisst: beim naechsten Lauf frisch nachsehen,
+        // statt eine womoeglich Monate alte Ermittlung wieder hervorzuholen.
+        subscription.status_checked_at = None;
+    }
     if let Some(completed) = req.completed {
         subscription.completed = completed;
     }
@@ -978,12 +1002,19 @@ fn run_webnovel_check(
             .into_iter()
             .filter(|subscription| subscription.id == id)
             .collect(),
-        None => all
-            .into_iter()
-            .filter(|subscription| {
-                subscription.enabled && !subscription.completed && !subscription.hiatus
-            })
-            .collect(),
+        None => {
+            let now = unix_now();
+            all.into_iter()
+                .filter(|subscription| {
+                    status::should_check(
+                        subscription.effective_status(),
+                        subscription.enabled,
+                        subscription.last_check_unix,
+                        now,
+                    )
+                })
+                .collect()
+        }
     };
 
     if selected.is_empty() {
@@ -1068,6 +1099,11 @@ fn subscription_kind(subscription: &Subscription) -> MediaKind {
 /// The timestamp is written even on failure, so a permanently unreachable
 /// source is retried weekly rather than on every single run.
 fn refresh_series_status(client: &PoliteClient, subscription: &mut Subscription) {
+    // Eine Handentscheidung ist kein Zwischenspeicher: da ist nichts
+    // aufzufrischen, und ueberschreiben duerfte sie ohnehin niemand.
+    if subscription.status_override.is_some() {
+        return;
+    }
     let Some(url) = status_source_for(subscription) else {
         return;
     };
@@ -1164,7 +1200,9 @@ fn check_one_subscription(
     if subscription.tags.is_empty() {
         subscription.tags = info.tags.clone();
     }
-    if info.completed_hint == Some(true) {
+    // Nur solange der Nutzer nichts von Hand gesetzt hat: sonst haette er
+    // seine Entscheidung nach jedem Prueflauf erneut zu treffen.
+    if info.completed_hint == Some(true) && subscription.status_override.is_none() {
         subscription.completed = true;
     }
 
@@ -1187,6 +1225,7 @@ fn check_one_subscription(
         .max()
         .unwrap_or(0)
         + 1;
+    let mut appeared = 0usize;
     for chapter in &info.chapters {
         if !known.contains(&normalize_url(&chapter.url)) {
             subscription.known_chapters.push(KnownChapter {
@@ -1199,7 +1238,17 @@ fn check_one_subscription(
                 placeholder: false,
             });
             next_index += 1;
+            appeared += 1;
         }
+    }
+    // Neue Kapitel sind der Beweis, dass die Serie doch laeuft — und der
+    // schlaegt jede Einschaetzung, auch die von Hand gesetzte.
+    if appeared > 0 && subscription.reopen() {
+        debug_log(&format!(
+            "check: '{}' war als abgeschlossen/pausiert markiert, hat aber \
+             {appeared} neue Kapitel — wieder auf laufend gesetzt.",
+            subscription.title
+        ));
     }
 
     // Wo die Dateien wirklich liegen, hat Vorrang: waehrend das Ziel offline
@@ -1366,7 +1415,7 @@ fn check_one_subscription(
     }
     // The complete edition is built once, when the serial is actually finished
     // — either because the status source says so or because the user marked it.
-    let finished = subscription.series_status.is_settled() || subscription.completed;
+    let finished = subscription.effective_status().is_settled();
     if options.build_complete && finished {
         build_complete_edition(&novel_dir, &cache_dir, subscription)?;
     }
@@ -1835,11 +1884,9 @@ fn manifest_bookkeeping(work_dir: &Path, subscription: &Subscription) -> manifes
         &subscription.title,
     );
     record.title = subscription.title.clone();
-    // Der ermittelte Status hat Vorrang; die Handschalter greifen nur, solange
-    // noch keine Quelle befragt wurde.
-    record.status = match subscription.series_status {
-        SeriesStatus::Unknown if subscription.completed => SeriesStatus::Completed,
-        SeriesStatus::Unknown if subscription.hiatus => SeriesStatus::Hiatus,
+    // Ins Manifest gehoert die geltende Einschaetzung; „unbekannt" waere fuer
+    // eine andere Instanz weniger wert als die Annahme, dass es weitergeht.
+    record.status = match subscription.effective_status() {
         SeriesStatus::Unknown => SeriesStatus::Ongoing,
         known => known,
     };

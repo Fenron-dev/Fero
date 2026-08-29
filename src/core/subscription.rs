@@ -121,6 +121,13 @@ pub struct Subscription {
     /// one is what the source said, and the two must not overwrite each other.
     #[serde(default, skip_serializing_if = "is_unknown_status")]
     pub series_status: SeriesStatus,
+    /// Life-cycle status set by hand, overriding every automatic source.
+    ///
+    /// Its own field rather than a value written into `series_status`: a check
+    /// run overwrites that one, and a setting the next run undoes is not a
+    /// setting. `None` means "whatever the sources say".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_override: Option<SeriesStatus>,
     /// Whether the translation is finished, when the source says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translation_done: Option<bool>,
@@ -244,6 +251,7 @@ impl Subscription {
             hiatus: false,
             enabled: true,
             series_status: SeriesStatus::Unknown,
+            status_override: None,
             translation_done: None,
             status_checked_at: None,
             media_kind: None,
@@ -257,6 +265,47 @@ impl Subscription {
             created_at_unix: unix_now(),
             trashed_at_unix: None,
         }
+    }
+
+    /// The status that applies, hand setting first.
+    ///
+    /// The one place the three possible answers are reconciled; see
+    /// [`crate::core::status::effective`] for the precedence and why.
+    pub fn effective_status(&self) -> SeriesStatus {
+        crate::core::status::effective(
+            self.status_override,
+            self.series_status,
+            self.completed,
+            self.hiatus,
+        )
+    }
+
+    /// Number of chapters a check run would still want to fetch.
+    pub fn pending_count(&self) -> usize {
+        self.known_chapters
+            .iter()
+            .filter(|chapter| chapter.needs_fetch())
+            .count()
+    }
+
+    /// Puts a serial that was considered finished back into the fast lane.
+    ///
+    /// Called when a run actually found new chapters. That is proof, and proof
+    /// outranks even the hand setting: leaving "abgeschlossen" in place would
+    /// send a work that is demonstrably still running back to the slow lane —
+    /// and the user set that switch before the evidence existed.
+    ///
+    /// Returns whether anything changed, so the caller can say so in the log
+    /// rather than silently overruling a decision the user made.
+    pub fn reopen(&mut self) -> bool {
+        if !self.effective_status().checks_rarely() {
+            return false;
+        }
+        self.status_override = None;
+        self.completed = false;
+        self.hiatus = false;
+        self.series_status = SeriesStatus::Ongoing;
+        true
     }
 
     /// Number of chapters whose content is cached locally.
@@ -667,6 +716,46 @@ mod tests {
 
     fn temp_system_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("subscription-test-{label}-{}", std::process::id()))
+    }
+
+    /// The hand setting is the whole point of `status_override`: the user
+    /// says "fertig", and no later check run may quietly disagree.
+    #[test]
+    fn a_hand_set_status_survives_what_the_source_says() {
+        let mut sub = Subscription::new("https://example.com/x", "madara", "X");
+        sub.series_status = SeriesStatus::Ongoing;
+        assert_eq!(sub.effective_status(), SeriesStatus::Ongoing);
+
+        sub.status_override = Some(SeriesStatus::Completed);
+        assert_eq!(sub.effective_status(), SeriesStatus::Completed);
+    }
+
+    /// New chapters are proof, and proof outranks the hand setting — otherwise
+    /// a work that is demonstrably running would sit in the slow lane.
+    #[test]
+    fn new_chapters_reopen_a_serial_that_was_marked_finished() {
+        let mut sub = Subscription::new("https://example.com/x", "madara", "X");
+        sub.status_override = Some(SeriesStatus::Completed);
+        sub.completed = true;
+
+        assert!(sub.reopen());
+        assert_eq!(sub.status_override, None);
+        assert!(!sub.completed);
+        assert_eq!(sub.effective_status(), SeriesStatus::Ongoing);
+
+        // A serial already in the fast lane has nothing to reopen, so nothing
+        // is reported and nothing is overwritten.
+        assert!(!sub.reopen());
+    }
+
+    /// A licensed serial keeps releasing until the takedown: reopening it
+    /// would throw away the one status that says "download now".
+    #[test]
+    fn reopen_leaves_the_fast_lane_statuses_alone() {
+        let mut sub = Subscription::new("https://example.com/x", "novelupdates", "X");
+        sub.series_status = SeriesStatus::Licensed;
+        assert!(!sub.reopen());
+        assert_eq!(sub.effective_status(), SeriesStatus::Licensed);
     }
 
     #[test]

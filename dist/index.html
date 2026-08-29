@@ -141,20 +141,31 @@
         </div>
 
         <div class="panel" id="detail-status-panel">
-          <p class="panel-label">Statusquelle</p>
+          <p class="panel-label">Status</p>
           <p class="hint">
-            Die NovelUpdates-Seite dieser Serie. Daraus liest Fero, ob sie noch
-            läuft, fertig übersetzt oder lizenziert ist — höchstens einmal pro
-            Woche. Bei einem NovelUpdates-Abo wird sie automatisch verwendet.
+            Abgeschlossene, pausierte und abgebrochene Werke werden nur noch
+            alle 30 Tage geprüft statt bei jedem Lauf — nicht gar nicht mehr,
+            denn manche Quellen machen nach Jahren weiter. Tauchen dabei neue
+            Kapitel auf, gilt die Serie wieder als laufend.
           </p>
-          <div class="row">
-            <input
-              type="url"
-              id="detail-status-url"
-              class="input grow"
-              placeholder="https://www.novelupdates.com/series/…"
-            />
+          <div class="row wrap">
+            <label class="field" style="margin: 0">
+              <span>Status</span>
+              <select id="detail-status" class="input">
+                <option value="auto">automatisch ermitteln</option>
+                <option value="ongoing">laufend</option>
+                <option value="completed">abgeschlossen</option>
+                <option value="hiatus">pausiert (Hiatus)</option>
+                <option value="dropped">abgebrochen</option>
+                <option value="licensed">lizenziert</option>
+              </select>
+            </label>
             <button class="action" id="detail-status-save">Speichern</button>
+          </div>
+          <p class="hint" id="detail-status-source-hint"></p>
+          <div class="row">
+            <input type="url" id="detail-status-url" class="input grow" />
+            <button class="action" id="detail-status-url-save">Speichern</button>
           </div>
           <p class="feedback" id="detail-status-feedback"></p>
         </div>

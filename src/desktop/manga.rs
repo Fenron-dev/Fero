@@ -40,15 +40,15 @@ use super::{
     current_parent, debug_log, extract_query_value, impl_outcome, resolve_workspace,
     safe_folder_segment, sanitize_path_segment, Workspace,
 };
-use crate::api::manga::{self, MangaChapterRef, MangaInfo};
-use crate::api::novel::{detect_image_media_type, PoliteClient};
-use crate::core::cbz::{write_cbz, CbzMeta, CbzPage};
+use crate::api::manga::{self, status as manga_status, MangaChapterRef, MangaInfo};
+use crate::api::novel::{detect_image_media_type, status::OriginalStatus, PoliteClient};
+use crate::core::cbz::{cbz_page_count, write_cbz, CbzMeta, CbzPage};
 use crate::core::manga::{
     blocked_reason, delete_subscription, list_subscriptions, list_trashed_subscriptions,
     load_subscription, normalize_url, purge_trashed_subscription, restore_subscription,
     save_subscription, subscription_id, trash_subscription, unix_now, KnownChapter, Subscription,
 };
-use crate::core::status::SeriesStatus;
+use crate::core::status::{self, ComicStatusFacts, SeriesStatus};
 use crate::deliver::manifest;
 use crate::deliver::targets::MediaKind;
 impl_outcome!(
@@ -232,6 +232,19 @@ pub(crate) struct MangaSubscriptionSummary {
     has_cover: bool,
     completed: bool,
     hiatus: bool,
+    /// The status that applies, hand setting first — what the badge shows.
+    series_status: SeriesStatus,
+    /// The hand setting itself, so the control can show what is set rather
+    /// than what happens to be true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_override: Option<SeriesStatus>,
+    /// Whether this status is worth pointing out unprompted.
+    needs_attention: bool,
+    /// The database entry the status is read from, when one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_checked_at: Option<u64>,
     enabled: bool,
     known_chapters: usize,
     downloaded_chapters: usize,
@@ -280,6 +293,11 @@ impl MangaSubscriptionSummary {
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
+            series_status: subscription.effective_status(),
+            status_override: subscription.status_override,
+            needs_attention: subscription.effective_status().needs_attention(),
+            status_source_url: subscription.status_source_url.clone(),
+            status_checked_at: subscription.status_checked_at,
             enabled: subscription.enabled,
             known_chapters: subscription.known_chapters.len(),
             downloaded_chapters: subscription.downloaded_count(),
@@ -488,7 +506,9 @@ fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo) {
     if subscription.tags.is_empty() {
         subscription.tags = info.tags.clone();
     }
-    if info.completed_hint == Some(true) {
+    // Nur solange der Nutzer nichts von Hand gesetzt hat: sonst haette er
+    // seine Entscheidung nach jedem Prueflauf erneut zu treffen.
+    if info.completed_hint == Some(true) && subscription.status_override.is_none() {
         subscription.completed = true;
     }
     // The adapter knows the reading direction (manga vs. manhwa/webtoon);
@@ -690,6 +710,20 @@ struct UpdateRequest {
     target_dir: Option<String>,
     #[serde(default)]
     clear_target_dir: bool,
+    /// Page the life-cycle status is read from — an AniList or MyAnimeList
+    /// entry for this series.
+    ///
+    /// Empty string clears it; unlike the target there is no separate flag,
+    /// because an empty URL is meaningless and unambiguous.
+    #[serde(default)]
+    status_source_url: Option<String>,
+    /// Life-cycle status set by hand. `"auto"` hands the decision back to the
+    /// status source; every other value must be a known status id.
+    ///
+    /// A string rather than a nullable status plus a clearing flag: `"auto"`
+    /// is what the dropdown offers, and it says exactly what it does.
+    #[serde(default)]
+    status_override: Option<String>,
     /// New total chapter cap; zero lifts the limit.
     #[serde(default)]
     download_limit: Option<u32>,
@@ -721,6 +755,18 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
         Err(error) => return MangaSimpleResponse::error(error.to_string()),
     };
 
+    if let Some(choice) = req.status_override.as_deref() {
+        match choice {
+            "auto" | "" => subscription.status_override = None,
+            id => match SeriesStatus::from_id(id) {
+                Some(status) => subscription.status_override = Some(status),
+                None => return MangaSimpleResponse::error(format!("Unbekannter Status: {id}")),
+            },
+        }
+        // Zurueck auf Automatik heisst: beim naechsten Lauf frisch nachsehen,
+        // statt eine womoeglich Monate alte Ermittlung wieder hervorzuholen.
+        subscription.status_checked_at = None;
+    }
     if let Some(completed) = req.completed {
         subscription.completed = completed;
     }
@@ -729,6 +775,12 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
     }
     if let Some(enabled) = req.enabled {
         subscription.enabled = enabled;
+    }
+    if let Some(url) = req.status_source_url {
+        let trimmed = url.trim();
+        subscription.status_source_url = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        // Eine neue Quelle muss erst gelesen werden, bevor sie etwas bedeutet.
+        subscription.status_checked_at = None;
     }
     if req.clear_target_dir {
         subscription.target_dir = None;
@@ -924,12 +976,19 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
             .into_iter()
             .filter(|subscription| subscription.id == id)
             .collect(),
-        None => all
-            .into_iter()
-            .filter(|subscription| {
-                subscription.enabled && !subscription.completed && !subscription.hiatus
-            })
-            .collect(),
+        None => {
+            let now = unix_now();
+            all.into_iter()
+                .filter(|subscription| {
+                    status::should_check(
+                        subscription.effective_status(),
+                        subscription.enabled,
+                        subscription.last_check_unix,
+                        now,
+                    )
+                })
+                .collect()
+        }
     };
 
     if selected.is_empty() {
@@ -1010,13 +1069,24 @@ fn check_one(
         .max()
         .unwrap_or(0)
         + 1;
+    let mut appeared = 0usize;
     for chapter in &info.chapters {
         if !known.contains(&normalize_url(&chapter.url)) {
             subscription
                 .known_chapters
                 .push(known_chapter(next_index, chapter));
             next_index += 1;
+            appeared += 1;
         }
+    }
+    // Neue Kapitel sind der Beweis, dass die Serie doch laeuft — und der
+    // schlaegt jede Einschaetzung, auch die von Hand gesetzte.
+    if appeared > 0 && subscription.reopen() {
+        debug_log(&format!(
+            "manga: '{}' war als abgeschlossen/pausiert markiert, hat aber \
+             {appeared} neue Kapitel — wieder auf laufend gesetzt.",
+            subscription.title
+        ));
     }
 
     // Wo die Dateien wirklich liegen, hat Vorrang; siehe Webnovel-Engine.
@@ -1066,6 +1136,7 @@ fn check_one(
     });
 
     let mut downloaded = 0usize;
+    let mut adopted = 0usize;
     let mut skipped = 0usize;
     let mut consecutive_failures = 0usize;
     let mut fetch_error: Option<FeroError> = None;
@@ -1088,13 +1159,33 @@ fn check_one(
             }
         };
 
+        let index = subscription.known_chapters[*chapter_position].index;
+
+        // Vor dem Laden nachsehen, ob die Datei am Ziel schon liegt. Die
+        // Abo-Datei ist nicht die einzige Wahrheit: nach einer Uebernahme, nach
+        // einem verlorenen Datenordner oder wenn ein zweiter Rechner auf
+        // dieselbe Freigabe schreibt, weiss der Werkordner mehr. Ein Kapitel
+        // neu zu ziehen, das danebenliegt, kostet Dutzende Bildabrufe fuer
+        // nichts.
+        if let Some(page_count) =
+            cbz_page_count(&series_dir.join(chapter_file_name(subscription, &chapter_ref, index)))
+        {
+            let chapter = &mut subscription.known_chapters[*chapter_position];
+            chapter.downloaded_at_unix = Some(unix_now());
+            chapter.placeholder = false;
+            chapter.page_count = Some(page_count);
+            adopted += 1;
+            save_subscription(&ws.store, subscription)?;
+            continue;
+        }
+
         match download_chapter(
             &parent,
             client,
             source.as_ref(),
             subscription,
             &chapter_ref,
-            subscription.known_chapters[*chapter_position].index,
+            index,
             job_id,
         ) {
             Ok(page_count) => {
@@ -1135,12 +1226,103 @@ fn check_one(
             subscription.title
         ));
     }
+    if adopted > 0 {
+        debug_log(&format!(
+            "manga check: '{}' — {adopted} Kapitel lagen bereits im Werkordner \
+             und wurden übernommen statt neu geladen.",
+            subscription.title
+        ));
+    }
+    // Erst hier, nicht vor dem Herunterladen: „abgeschlossen" verlangt, dass
+    // nichts mehr aussteht, und das entscheidet sich in der Schleife darueber.
+    refresh_series_status(client, subscription, info.completed_hint);
     refresh_manifest(&series_dir, subscription);
 
     if let Some(error) = fetch_error {
         return Err(error);
     }
     Ok(downloaded)
+}
+
+/// Refreshes the life-cycle status from a comic database, at most weekly.
+///
+/// Best effort and silent: a status is a nice-to-have, and a database that is
+/// slow today must not stop chapters from being fetched. The timestamp is
+/// written even on failure, so an unreachable source is retried weekly rather
+/// than on every single run.
+///
+/// `source_completed` is what the scanlation site itself said. It is passed in
+/// rather than read here because it comes from the series page that was
+/// already fetched for the chapter list — asking twice would be a second
+/// request for an answer already in hand.
+fn refresh_series_status(
+    client: &PoliteClient,
+    subscription: &mut Subscription,
+    source_completed: Option<bool>,
+) {
+    // Eine Handentscheidung ist kein Zwischenspeicher: da ist nichts
+    // aufzufrischen, und ueberschreiben duerfte sie ohnehin niemand.
+    if subscription.status_override.is_some() {
+        return;
+    }
+    if !status::is_due(subscription.status_checked_at, unix_now()) {
+        return;
+    }
+    subscription.status_checked_at = Some(unix_now());
+
+    let found = match subscription.status_source_url.as_deref() {
+        Some(url) => manga_status::fetch_by_url(client, url),
+        None => manga_status::search(&subscription.title),
+    };
+
+    let publication = match found {
+        Ok(Some(entry)) => {
+            // Den gefundenen Eintrag festnageln: dann steht im Abo sichtbar,
+            // worauf sich der Status stuetzt — und wer ihn fuer falsch haelt,
+            // kann ihn austauschen, statt gegen eine unsichtbare Suche zu
+            // argumentieren.
+            if subscription.status_source_url.is_none() {
+                if let Some(url) = entry.url.as_deref() {
+                    debug_log(&format!(
+                        "manga status: '{}' zugeordnet zu '{}' ({url})",
+                        subscription.title,
+                        entry.title.as_deref().unwrap_or("ohne Titel"),
+                    ));
+                    subscription.status_source_url = Some(url.to_string());
+                }
+            }
+            entry.publication
+        }
+        Ok(None) => {
+            debug_log(&format!(
+                "manga status: '{}' — kein sicherer Treffer. Fuer einen \
+                 verlaesslichen Status den AniList- oder MyAnimeList-Link im \
+                 Abo eintragen.",
+                subscription.title
+            ));
+            OriginalStatus::Unknown
+        }
+        Err(error) => {
+            // Nichts ueberschreiben: ein Netzfehler ist keine Aussage ueber
+            // die Serie, und der zuletzt ermittelte Status bleibt richtiger
+            // als „unbekannt".
+            debug_log(&format!("manga status: '{}' — {error}", subscription.title));
+            return;
+        }
+    };
+
+    let facts = ComicStatusFacts {
+        publication,
+        source_completed,
+    };
+    let resolved = status::resolve_comic(&facts, subscription.pending_count());
+    if resolved != subscription.series_status {
+        debug_log(&format!(
+            "manga status: '{}' {:?} -> {:?}",
+            subscription.title, subscription.series_status, resolved
+        ));
+    }
+    subscription.series_status = resolved;
 }
 
 /// Downloads one chapter's pages and writes the CBZ. Returns the page count.
@@ -1380,12 +1562,11 @@ fn manifest_bookkeeping(series_dir: &Path, subscription: &Subscription) -> manif
         &subscription.title,
     );
     record.title = subscription.title.clone();
-    record.status = if subscription.completed {
-        SeriesStatus::Completed
-    } else if subscription.hiatus {
-        SeriesStatus::Hiatus
-    } else {
-        SeriesStatus::Ongoing
+    // Ins Manifest gehoert die geltende Einschaetzung; „unbekannt" waere fuer
+    // eine andere Instanz weniger wert als die Annahme, dass es weitergeht.
+    record.status = match subscription.effective_status() {
+        SeriesStatus::Unknown => SeriesStatus::Ongoing,
+        known => known,
     };
     record.last_check_unix = Some(unix_now());
     record.chapters = subscription
@@ -1527,5 +1708,24 @@ mod tests {
         assert_eq!(record.genres, vec!["Drama".to_string()]);
         assert_eq!(record.artist.as_deref(), Some("Zeichner"));
         assert!(record.completed);
+    }
+
+    /// Der Fall, der den Handschalter noetig gemacht hat: eine Quellseite darf
+    /// die Entscheidung des Nutzers nicht bei jedem Prueflauf zurueckdrehen.
+    #[test]
+    fn a_hand_set_status_survives_what_the_source_page_claims() {
+        let mut record = subscription("Serie");
+        record.status_override = Some(SeriesStatus::Ongoing);
+
+        apply_series_info(
+            &mut record,
+            &MangaInfo {
+                completed_hint: Some(true),
+                ..MangaInfo::default()
+            },
+        );
+
+        assert!(!record.completed);
+        assert_eq!(record.effective_status(), SeriesStatus::Ongoing);
     }
 }

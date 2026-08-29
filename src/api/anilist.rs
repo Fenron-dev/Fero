@@ -158,15 +158,17 @@ query ($search: String!, $isAdult: Boolean) {
 /// Compact query for light-novel lookups (type MANGA, format NOVEL).
 const ANILIST_NOVEL_QUERY: &str = r#"
 query ($search: String!) {
-  Page(page: 1, perPage: 1) {
+  Page(page: 1, perPage: 5) {
     media(search: $search, type: MANGA, format_in: [NOVEL], sort: SEARCH_MATCH) {
       id
+      idMal
       siteUrl
       title {
         romaji
         english
         native
       }
+      synonyms
       description(asHtml: false)
       status
       genres
@@ -190,15 +192,50 @@ query ($search: String!) {
 /// is for.
 const ANILIST_MANGA_QUERY: &str = r#"
 query ($search: String!) {
-  Page(page: 1, perPage: 1) {
+  Page(page: 1, perPage: 5) {
     media(search: $search, type: MANGA, format_in: [MANGA, ONE_SHOT], sort: SEARCH_MATCH) {
       id
+      idMal
       siteUrl
       title {
         romaji
         english
         native
       }
+      synonyms
+      description(asHtml: false)
+      status
+      genres
+      averageScore
+      tags {
+        name
+      }
+      coverImage {
+        extraLarge
+        large
+      }
+    }
+  }
+}
+"#;
+
+/// Lookup of one entry by AniList id — the pinned-source path.
+///
+/// Wrapped in `Page` although exactly one entry comes back, so it decodes with
+/// the same types as the two searches instead of needing a second mapping.
+const ANILIST_MEDIA_BY_ID_QUERY: &str = r#"
+query ($id: Int!) {
+  Page(page: 1, perPage: 1) {
+    media(id: $id, type: MANGA) {
+      id
+      idMal
+      siteUrl
+      title {
+        romaji
+        english
+        native
+      }
+      synonyms
       description(asHtml: false)
       status
       genres
@@ -424,15 +461,20 @@ impl AniListClient {
         .to_string()
     }
 
-    /// Searches AniList for a light novel and returns the best match.
+    /// Searches AniList for a light novel and returns the best plausible match.
     ///
     /// Uses `type: MANGA, format_in: [NOVEL]` — AniList files light novels
     /// under the manga type with a dedicated NOVEL format.
     pub fn search_novel(&self, search: &str) -> Result<Option<AniListNovelMetadata>> {
-        self.search_manga_shaped(ANILIST_NOVEL_QUERY, search)
+        let variables = serde_json::json!({ "search": search });
+        Ok(pick_match(
+            self.query_novel_shaped(ANILIST_NOVEL_QUERY, variables)?,
+            search,
+        ))
     }
 
-    /// Searches AniList for a manga (comic formats) and returns the best match.
+    /// Searches AniList for a manga (comic formats) and returns the best
+    /// plausible match.
     ///
     /// Shares the response shape with [`Self::search_novel`]; only the format
     /// filter differs.
@@ -441,21 +483,42 @@ impl AniListClient {
     /// - `search` – Series title as scraped from the source site
     ///
     /// # Returns
-    /// - `Ok(Some(metadata))` – Best match for the title
-    /// - `Ok(None)` – AniList knows no series under that name
+    /// - `Ok(Some(metadata))` – A hit whose title plausibly names the same work
+    /// - `Ok(None)` – AniList knows nothing under that name, or nothing that
+    ///   passes [`titles_match`]
     ///
     /// # Errors
     /// - `FeroError::ExternalApi` on transport failures or non-2xx responses
     pub fn search_manga(&self, search: &str) -> Result<Option<AniListNovelMetadata>> {
-        self.search_manga_shaped(ANILIST_MANGA_QUERY, search)
+        let variables = serde_json::json!({ "search": search });
+        Ok(pick_match(
+            self.query_novel_shaped(ANILIST_MANGA_QUERY, variables)?,
+            search,
+        ))
     }
 
-    /// Runs one of the compact `type: MANGA` queries and maps the first hit.
-    fn search_manga_shaped(
+    /// Fetches one entry by AniList id.
+    ///
+    /// No title matching happens here, and none should: the id comes from a
+    /// link the user pinned to the subscription, which is a better answer than
+    /// any similarity score.
+    ///
+    /// # Errors
+    /// - `FeroError::ExternalApi` on transport failures or non-2xx responses
+    pub fn manga_by_id(&self, id: u32) -> Result<Option<AniListNovelMetadata>> {
+        let variables = serde_json::json!({ "id": id });
+        Ok(self
+            .query_novel_shaped(ANILIST_MEDIA_BY_ID_QUERY, variables)?
+            .into_iter()
+            .next())
+    }
+
+    /// Runs one of the compact `type: MANGA` queries and maps every hit.
+    fn query_novel_shaped(
         &self,
         query: &str,
-        search: &str,
-    ) -> Result<Option<AniListNovelMetadata>> {
+        variables: serde_json::Value,
+    ) -> Result<Vec<AniListNovelMetadata>> {
         let client = Client::builder()
             .timeout(Duration::from_secs(12))
             .build()
@@ -470,7 +533,7 @@ impl AniListClient {
 
         let body = serde_json::json!({
             "query": query,
-            "variables": { "search": search }
+            "variables": variables,
         })
         .to_string();
 
@@ -488,35 +551,14 @@ impl AniListClient {
         let payload: AniListNovelResponse = response
             .json()
             .map_err(|error| FeroError::ExternalApi(error.to_string()))?;
-        let media = payload
+        Ok(payload
             .data
             .and_then(|data| data.page)
             .map(|page| page.media)
             .unwrap_or_default()
             .into_iter()
-            .next();
-
-        Ok(media.map(|raw| AniListNovelMetadata {
-            anilist_id: raw.id,
-            anilist_url: raw.site_url,
-            title: raw
-                .title
-                .as_ref()
-                .and_then(|title| title.english.clone().or_else(|| title.romaji.clone())),
-            description: raw.description,
-            status: raw.status,
-            genres: raw.genres.unwrap_or_default(),
-            tags: raw
-                .tags
-                .unwrap_or_default()
-                .into_iter()
-                .map(|tag| tag.name)
-                .collect(),
-            average_score: raw.average_score,
-            cover_url: raw
-                .cover_image
-                .and_then(|cover| cover.extra_large.or(cover.large)),
-        }))
+            .map(AniListNovelMetadata::from_raw)
+            .collect())
     }
 
     /// Searches AniList for an anime title and returns the best match.
@@ -1283,6 +1325,14 @@ pub struct AniListNovelMetadata {
     pub description: Option<String>,
     /// AniList status string (RELEASING, FINISHED, …).
     pub status: Option<String>,
+    /// Every title AniList knows for the entry — romaji, english, native and
+    /// synonyms. The raw material for [`titles_match`]: scanlation sites and
+    /// databases routinely disagree on which of them is *the* title.
+    #[serde(default)]
+    pub titles: Vec<String>,
+    /// MyAnimeList id for the same work, where AniList has the cross-reference.
+    #[serde(default)]
+    pub mal_id: Option<u32>,
     /// Genre names.
     pub genres: Vec<String>,
     /// Tag names.
@@ -1291,6 +1341,137 @@ pub struct AniListNovelMetadata {
     pub average_score: Option<f32>,
     /// Best available cover image URL.
     pub cover_url: Option<String>,
+}
+
+impl AniListNovelMetadata {
+    /// Maps one raw entry, collecting every title variant on the way.
+    fn from_raw(raw: AniListNovelRaw) -> Self {
+        let mut titles = Vec::new();
+        if let Some(title) = raw.title.as_ref() {
+            for variant in [&title.english, &title.romaji, &title.native] {
+                if let Some(text) = variant {
+                    titles.push(text.clone());
+                }
+            }
+        }
+        titles.extend(raw.synonyms.iter().cloned());
+
+        Self {
+            anilist_id: raw.id,
+            anilist_url: raw.site_url,
+            title: raw
+                .title
+                .as_ref()
+                .and_then(|title| title.english.clone().or_else(|| title.romaji.clone())),
+            description: raw.description,
+            status: raw.status,
+            titles,
+            mal_id: raw.id_mal,
+            genres: raw.genres.unwrap_or_default(),
+            tags: raw
+                .tags
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tag| tag.name)
+                .collect(),
+            average_score: raw.average_score,
+            cover_url: raw
+                .cover_image
+                .and_then(|cover| cover.extra_large.or(cover.large)),
+        }
+    }
+}
+
+/// The first candidate whose title plausibly names the work being looked up.
+///
+/// AniList answers a search with a ranking, never with "no idea": for a title
+/// it does not know it returns whatever came closest. Taking that hit on faith
+/// is how a manhwa ends up wearing a stranger's description, cover and — once
+/// the life-cycle status hangs off the same lookup — a stranger's "finished".
+/// A wrong status is worse than no status, so the top hit has to earn it.
+fn pick_match(
+    candidates: Vec<AniListNovelMetadata>,
+    wanted: &str,
+) -> Option<AniListNovelMetadata> {
+    candidates
+        .into_iter()
+        .find(|candidate| titles_match(wanted, &candidate.titles))
+}
+
+/// Whether any of `candidates` plausibly names the same work as `wanted`.
+///
+/// Scanlation titles and database titles differ in predictable ways — a
+/// translated-vs-licensed rendering ("Max Level Player" vs. "The Maxed-out
+/// Player"), an added subtitle, a romaji/english split. So the comparison runs
+/// over every known title and synonym, and an exact match is not required.
+/// What *is* required is that the words largely agree: the pair above shares
+/// one word out of five and is rightly rejected, which is the signal to pin the
+/// right entry by hand.
+pub fn titles_match(wanted: &str, candidates: &[String]) -> bool {
+    let wanted_key = normalize_title(wanted);
+    if wanted_key.is_empty() {
+        return false;
+    }
+    let wanted_words = title_words(wanted);
+
+    candidates.iter().any(|candidate| {
+        let key = normalize_title(candidate);
+        if key.is_empty() {
+            return false;
+        }
+        if key == wanted_key {
+            return true;
+        }
+        // One title starting with the other covers subtitles and season
+        // suffixes ("Omniscient Reader" vs. "Omniscient Reader's Viewpoint").
+        // The length floor keeps a short generic title from swallowing
+        // everything that happens to start the same way.
+        if key.len() >= 8
+            && wanted_key.len() >= 8
+            && (key.starts_with(&wanted_key) || wanted_key.starts_with(&key))
+        {
+            return true;
+        }
+        word_overlap(&wanted_words, &title_words(candidate)) >= 0.6
+    })
+}
+
+/// A title reduced to its comparable core: lowercase, letters and digits only.
+///
+/// Punctuation and spacing are where the same title differs between two sites
+/// most often, and they never carry the distinction between two works.
+fn normalize_title(text: &str) -> String {
+    text.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The significant words of a title.
+///
+/// Articles and joining words are dropped: they pad the overlap of two titles
+/// that share nothing else, and their presence is exactly what differs between
+/// a fan title and a licensed one.
+fn title_words(text: &str) -> Vec<String> {
+    const FILLER: [&str; 8] = ["the", "a", "an", "of", "and", "to", "in", "no"];
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(|word| word.to_lowercase())
+        .filter(|word| !FILLER.contains(&word.as_str()))
+        .collect()
+}
+
+/// Share of words the two titles have in common (Jaccard, 0.0–1.0).
+fn word_overlap(left: &[String], right: &[String]) -> f32 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let shared = left.iter().filter(|word| right.contains(word)).count();
+    let union = left.len() + right.len() - shared;
+    if union == 0 {
+        return 0.0;
+    }
+    shared as f32 / union as f32
 }
 
 #[derive(Debug, Deserialize)]
@@ -1313,9 +1494,13 @@ struct AniListNovelPage {
 #[derive(Debug, Deserialize)]
 struct AniListNovelRaw {
     id: u32,
+    #[serde(rename = "idMal")]
+    id_mal: Option<u32>,
     #[serde(rename = "siteUrl")]
     site_url: Option<String>,
     title: Option<AniListNovelTitle>,
+    #[serde(default)]
+    synonyms: Vec<String>,
     description: Option<String>,
     status: Option<String>,
     genres: Option<Vec<String>>,
@@ -1330,7 +1515,6 @@ struct AniListNovelRaw {
 struct AniListNovelTitle {
     romaji: Option<String>,
     english: Option<String>,
-    #[allow(dead_code)]
     native: Option<String>,
 }
 
@@ -1355,5 +1539,68 @@ mod tests {
         let query = AniListClient::build_search_query("Naruto", false);
         assert!(query.contains("Media"));
         assert!(query.contains("Naruto"));
+    }
+
+    fn titles(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn the_same_work_under_a_different_rendering_still_matches() {
+        // Punctuation and case are where two sites disagree first.
+        assert!(titles_match("Solo Leveling", &titles(&["solo-leveling!"])));
+        // A synonym carries the match when the main title does not.
+        assert!(titles_match(
+            "Apotheosis",
+            &titles(&["Bai Lian Cheng Shen", "Apotheosis"])
+        ));
+        // Subtitles and season suffixes are additions, not other works.
+        assert!(titles_match(
+            "Omniscient Reader",
+            &titles(&["Omniscient Reader's Viewpoint"])
+        ));
+        // Word order and filler words do not make it a different series.
+        assert!(titles_match(
+            "The Beginning After the End",
+            &titles(&["Beginning After The End"])
+        ));
+    }
+
+    /// The case that motivated the guard: a plausible-looking near-miss the
+    /// search would otherwise hand over as the top hit.
+    #[test]
+    fn a_near_miss_is_rejected_rather_than_adopted() {
+        assert!(!titles_match(
+            "Max Level Player",
+            &titles(&["The Maxed-out Player"])
+        ));
+        assert!(!titles_match("Apotheosis", &titles(&["Apocalypse"])));
+        assert!(!titles_match("", &titles(&["Anything"])));
+        assert!(!titles_match("Something", &[]));
+    }
+
+    /// A ranking is not a lookup: the first hit only wins if it fits.
+    #[test]
+    fn pick_match_skips_the_top_hit_when_it_does_not_fit() {
+        let entry = |id: u32, name: &str| AniListNovelMetadata {
+            anilist_id: id,
+            anilist_url: None,
+            title: Some(name.to_string()),
+            description: None,
+            status: None,
+            titles: titles(&[name]),
+            mal_id: None,
+            genres: Vec::new(),
+            tags: Vec::new(),
+            average_score: None,
+            cover_url: None,
+        };
+
+        let hits = vec![entry(1, "Tower of Babel"), entry(2, "Tower of God")];
+        assert_eq!(
+            pick_match(hits, "Tower of God").map(|hit| hit.anilist_id),
+            Some(2)
+        );
+        assert!(pick_match(vec![entry(1, "Etwas anderes")], "Max Level Player").is_none());
     }
 }

@@ -194,7 +194,7 @@ const STATUS_LABELS = {
 const STATUS_HINTS = {
   licensed: "Lizenziert — Fan-Übersetzungen verschwinden danach oft innerhalb von Tagen. Jetzt vollständig herunterladen.",
   dropped: "Von der Übersetzergruppe abgebrochen. Möglicherweise übernimmt eine andere Gruppe.",
-  hiatus: "Pausiert — seit längerem keine neuen Kapitel. Die Prüfungen laufen weiter.",
+  hiatus: "Pausiert — seit längerem keine neuen Kapitel. Fero sieht weiter nach, nur seltener; kommt etwas, gilt die Serie wieder als laufend.",
 };
 
 function statusBadge(status) {
@@ -415,7 +415,9 @@ function openDetail(id) {
           ? "Hiatus"
           : "laufend"
   );
-  if (item.statusCheckedAt) {
+  if (item.statusOverride) {
+    fact(facts, "Status kommt von", "Handeinstellung");
+  } else if (item.statusCheckedAt) {
     fact(facts, "Status geprüft", new Date(item.statusCheckedAt * 1000).toLocaleDateString("de-DE"));
   }
   if (item.translationDone !== undefined && item.translationDone !== null) {
@@ -459,11 +461,8 @@ function openDetail(id) {
   setFeedback($("detail-target-feedback"), "");
   setFeedback($("detail-login-feedback"), "");
   setFeedback($("detail-status-feedback"), "");
-  // Nur Webnovels haben eine NovelUpdates-Statusquelle. Das Panel bei Manga
-  // stehen zu lassen wuerde etwas versprechen, das nicht passiert.
-  $("detail-status-panel").hidden = item.kind !== "webnovel";
   $("detail-rebuild").hidden = item.kind !== "webnovel";
-  $("detail-status-url").value = item.statusSourceUrl || "";
+  renderDetailStatus(item);
   refreshLoginState();
   showView("detail");
 }
@@ -496,7 +495,59 @@ function currentItem() {
   return subscriptions.find((entry) => entry.id === currentDetailId);
 }
 
+/* Die Statusquelle unterscheidet sich je Engine: Webnovels lesen eine
+ * NovelUpdates-Seite, Manga einen AniList- oder MyAnimeList-Eintrag. Der
+ * Handschalter darueber gilt fuer beide gleich. */
+const STATUS_SOURCE = {
+  webnovel: {
+    placeholder: "https://www.novelupdates.com/series/…",
+    hint:
+      "Statusquelle: die NovelUpdates-Seite dieser Serie. Daraus liest Fero, ob sie " +
+      "noch läuft, fertig übersetzt oder lizenziert ist. Bei einem NovelUpdates-Abo " +
+      "wird sie automatisch verwendet.",
+  },
+  manga: {
+    placeholder: "https://anilist.co/manga/… oder https://myanimelist.net/manga/…",
+    hint:
+      "Statusquelle: der AniList- oder MyAnimeList-Eintrag dieser Serie. Fero sucht " +
+      "ihn selbst, übernimmt aber nur einen Treffer, dessen Titel wirklich passt — " +
+      "Scanlation- und Datenbanktitel weichen oft voneinander ab. Findet er nichts " +
+      "Sicheres, steht das im Protokoll und der Link gehört hierher.",
+  },
+};
+
+function renderDetailStatus(item) {
+  const source = STATUS_SOURCE[item.kind] || STATUS_SOURCE.manga;
+  $("detail-status").value = item.statusOverride || "auto";
+  $("detail-status-source-hint").textContent = source.hint;
+  const field = $("detail-status-url");
+  field.placeholder = source.placeholder;
+  field.value = item.statusSourceUrl || "";
+}
+
 $("detail-status-save").addEventListener("click", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-status-feedback");
+  const choice = $("detail-status").value;
+  try {
+    await post(`${item.kind}/update`, { id: item.id, statusOverride: choice });
+    await loadSubscriptions();
+    const updated = currentItem();
+    if (updated) openDetail(updated.id);
+    setFeedback(
+      node,
+      choice === "auto"
+        ? "Gespeichert. Der Status wird beim nächsten Prüflauf wieder selbst ermittelt."
+        : "Gespeichert. Diese Angabe gilt, bis neue Kapitel auftauchen.",
+      "ok"
+    );
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+});
+
+$("detail-status-url-save").addEventListener("click", async () => {
   const item = currentItem();
   if (!item) return;
   const node = $("detail-status-feedback");

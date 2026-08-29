@@ -100,7 +100,6 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     chapters.reverse();
     super::sort_chapters_by_number(&mut chapters);
 
-    let status = first_text(&html, ".post-status .summary-content").unwrap_or_default();
     Ok(MangaInfo {
         title,
         author: first_text(&html, ".author-content a"),
@@ -108,7 +107,10 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         cover_url: image_source(&html, ".summary_image img").map(|src| absolutize(page_url, &src)),
         description: first_text(&html, ".summary__content")
             .or_else(|| first_text(&html, ".description-summary")),
-        completed_hint: Some(status.to_lowercase().contains("completed")),
+        completed_hint: series_status(&html).map(|status| {
+            let lower = status.to_lowercase();
+            lower.contains("completed") || lower.contains("finished")
+        }),
         genres: collect_texts(&html, ".genres-content a"),
         tags: Vec::new(),
         // Madara hosts manga, manhua and manhwa alike; manhua/manhwa read
@@ -192,6 +194,49 @@ fn collect_texts(html: &Html, raw_selector: &str) -> Vec<String> {
         .collect()
 }
 
+/// The series status out of the `.post-status` block.
+///
+/// The block holds two `.post-content_item`s in a fixed order — "Release" (a
+/// year) first, "Status" second. Taking the first `.summary-content`, as this
+/// did, therefore read the release year and never once found "Completed": a
+/// Madara series could not be recognized as finished at all. The heading has to
+/// decide which of the two is meant.
+///
+/// `None` rather than a guess when the block is missing: no answer is a
+/// different thing from "still running", and only one of them is honest.
+fn series_status(html: &Html) -> Option<String> {
+    let item = Selector::parse(".post-status .post-content_item").ok()?;
+    let heading = Selector::parse(".summary-heading").ok()?;
+    let content = Selector::parse(".summary-content").ok()?;
+
+    for block in html.select(&item) {
+        let label = block
+            .select(&heading)
+            .next()
+            .map(|node| tidy_text(&node.text().collect::<String>()).to_lowercase())
+            .unwrap_or_default();
+        if !label.contains("status") {
+            continue;
+        }
+        if let Some(text) = block
+            .select(&content)
+            .next()
+            .map(|node| tidy_text(&node.text().collect::<String>()))
+            .filter(|text| !text.is_empty())
+        {
+            return Some(text);
+        }
+    }
+
+    // Themes that drop the item wrappers keep the same order, so the status is
+    // the last entry rather than the first.
+    let any = Selector::parse(".post-status .summary-content").ok()?;
+    html.select(&any)
+        .last()
+        .map(|node| tidy_text(&node.text().collect::<String>()))
+        .filter(|text| !text.is_empty())
+}
+
 fn first_text(html: &Html, raw_selector: &str) -> Option<String> {
     let selector = Selector::parse(raw_selector).ok()?;
     let text = tidy_text(&html.select(&selector).next()?.text().collect::<String>());
@@ -218,7 +263,16 @@ mod tests {
       <div class="artist-content"><a href="/artist/x/">Asuka Konishi</a></div>
       <div class="genres-content"><a href="/genre/drama/">Drama</a><a href="/genre/romance/">Romance</a></div>
       <div class="summary__content">Eine Yakuza-Tochter.</div>
-      <div class="post-status"><div class="summary-content">OnGoing</div></div>
+      <div class="post-status">
+        <div class="post-content_item">
+          <div class="summary-heading"><h5>Release</h5></div>
+          <div class="summary-content">2015</div>
+        </div>
+        <div class="post-content_item">
+          <div class="summary-heading"><h5>Status</h5></div>
+          <div class="summary-content">OnGoing</div>
+        </div>
+      </div>
       <ul>
         <li class="wp-manga-chapter"><a href="https://x.example/manga/y/chapter-3/">Chapter 3</a></li>
         <li class="wp-manga-chapter"><a href="https://x.example/manga/y/chapter-2/">Chapter 2</a></li>
@@ -232,6 +286,45 @@ mod tests {
         class=\"wp-manga-chapter-img\"></div>\
         <div class=\"page-break\"><img id=\"image-1\" src=\"\n\t\thttps://cdn.example/2.jpeg\" \
         class=\"wp-manga-chapter-img\"></div></div></body></html>";
+
+    /// The block as Madara really emits it: "Release" before "Status". Reading
+    /// the first `.summary-content` here yields the year 2019, which is why a
+    /// finished series used to show up as "laufend" forever.
+    const FINISHED_PAGE: &str = r#"
+    <html><body>
+      <div class="post-title"><h1>APOTHEOSIS</h1></div>
+      <div class="post-status">
+        <div class="post-content_item">
+          <div class="summary-heading"><h5>Release</h5></div>
+          <div class="summary-content">2019</div>
+        </div>
+        <div class="post-content_item">
+          <div class="summary-heading"><h5>Status</h5></div>
+          <div class="summary-content">Completed</div>
+        </div>
+      </div>
+      <ul><li class="wp-manga-chapter"><a href="https://x.example/manga/y/chapter-1/">Chapter 1</a></li></ul>
+    </body></html>"#;
+
+    #[test]
+    fn the_status_is_read_from_its_heading_not_from_the_release_year() {
+        let info = parse_series_page("https://x.example/manga/y/", FINISHED_PAGE)
+            .expect("series page should parse");
+        assert_eq!(info.completed_hint, Some(true));
+    }
+
+    /// No status block at all is "no answer", not "still running" — the
+    /// difference decides whether Fero may ever call a series finished.
+    #[test]
+    fn a_page_without_a_status_block_gives_no_hint() {
+        let page = r#"<html><body>
+            <div class="post-title"><h1>Ohne Status</h1></div>
+            <ul><li class="wp-manga-chapter"><a href="https://x.example/manga/y/chapter-1/">Chapter 1</a></li></ul>
+        </body></html>"#;
+        let info = parse_series_page("https://x.example/manga/y/", page)
+            .expect("series page should parse");
+        assert_eq!(info.completed_hint, None);
+    }
 
     #[test]
     fn parses_series_metadata_and_orders_chapters_oldest_first() {

@@ -212,6 +212,25 @@ fn zip_error(error: zip::result::ZipError) -> FeroError {
     FeroError::Io(format!("cbz write failed: {error}"))
 }
 
+/// Counts the page images in an existing CBZ, or `None` if it is not one.
+///
+/// The point is not the number but the verdict: a file that opens as a zip and
+/// still has its central directory is a finished download, and re-fetching it
+/// would spend a whole chapter's worth of requests on bytes already on disk.
+/// A run aborted mid-write leaves a truncated archive, which fails to open here
+/// and is fetched again — which is the desired answer in that case.
+///
+/// `ComicInfo.xml` is not a page and is not counted.
+pub fn cbz_page_count(path: &Path) -> Option<u32> {
+    let file = File::open(path).ok()?;
+    let archive = zip::ZipArchive::new(file).ok()?;
+    let pages = archive
+        .file_names()
+        .filter(|name| !name.eq_ignore_ascii_case("ComicInfo.xml"))
+        .count();
+    (pages > 0).then_some(pages as u32)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -245,6 +264,26 @@ mod tests {
         let expected = names.clone();
         names.sort();
         assert_eq!(names, expected);
+    }
+
+    /// The check that saves a whole chapter's worth of downloads: a finished
+    /// archive answers with its page count, anything else with `None`.
+    #[test]
+    fn an_existing_archive_reports_its_pages_and_a_broken_one_does_not() {
+        let target = temp_target("count");
+        let pages = vec![page("image/jpeg"), page("image/png"), page("image/webp")];
+        write_cbz(&target, &CbzMeta::default(), &pages).expect("write should succeed");
+
+        // ComicInfo.xml is metadata, not a page.
+        assert_eq!(cbz_page_count(&target), Some(3));
+        assert_eq!(cbz_page_count(&temp_target("missing")), None);
+
+        // A run aborted mid-write leaves a file without a central directory.
+        let truncated = temp_target("truncated");
+        std::fs::write(&truncated, b"PK\x03\x04 und dann nichts mehr").expect("write");
+        assert_eq!(cbz_page_count(&truncated), None);
+        let _ = std::fs::remove_file(&truncated);
+        let _ = std::fs::remove_file(&target);
     }
 
     #[test]
