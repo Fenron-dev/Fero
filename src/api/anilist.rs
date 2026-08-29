@@ -1390,10 +1390,7 @@ impl AniListNovelMetadata {
 /// is how a manhwa ends up wearing a stranger's description, cover and — once
 /// the life-cycle status hangs off the same lookup — a stranger's "finished".
 /// A wrong status is worse than no status, so the top hit has to earn it.
-fn pick_match(
-    candidates: Vec<AniListNovelMetadata>,
-    wanted: &str,
-) -> Option<AniListNovelMetadata> {
+fn pick_match(candidates: Vec<AniListNovelMetadata>, wanted: &str) -> Option<AniListNovelMetadata> {
     candidates
         .into_iter()
         .find(|candidate| titles_match(wanted, &candidate.titles))

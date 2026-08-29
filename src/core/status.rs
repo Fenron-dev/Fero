@@ -378,7 +378,10 @@ mod tests {
             SeriesStatus::Hiatus,
         ] {
             assert!(status.checks_rarely(), "{status:?}");
-            assert!(!should_check(status, true, Some(now - 60), now), "{status:?}");
+            assert!(
+                !should_check(status, true, Some(now - 60), now),
+                "{status:?}"
+            );
             assert!(
                 should_check(status, true, Some(now - IDLE_RECHECK_SECS), now),
                 "{status:?}"
@@ -423,7 +426,12 @@ mod tests {
             SeriesStatus::Completed
         );
         assert_eq!(
-            effective(Some(SeriesStatus::Ongoing), SeriesStatus::Completed, true, false),
+            effective(
+                Some(SeriesStatus::Ongoing),
+                SeriesStatus::Completed,
+                true,
+                false
+            ),
             SeriesStatus::Ongoing
         );
     }
