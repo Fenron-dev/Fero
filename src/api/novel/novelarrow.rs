@@ -82,6 +82,7 @@ impl NovelSource for NovelArrowSource {
             description: meta_content(&html, "og:description")
                 .or_else(|| first_text(&html, ".description, .synopsis")),
             completed_hint,
+            latest_release_unix: None,
             genres,
             tags: Vec::new(),
             chapters,

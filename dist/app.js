@@ -197,6 +197,20 @@ const STATUS_HINTS = {
   hiatus: "Pausiert — seit längerem keine neuen Kapitel. Fero sieht weiter nach, nur seltener; kommt etwas, gilt die Serie wieder als laufend.",
 };
 
+/* „vor 3 Tagen" statt eines Datums, das man erst im Kopf verrechnen muss.
+ * Tage sind die feinste sinnvolle Einheit: die Quellen nennen selbst keine
+ * Uhrzeit, alles Genauere waere erfunden. */
+function sinceLabel(unix) {
+  const days = Math.floor((Date.now() / 1000 - unix) / 86400);
+  if (days <= 0) return "heute";
+  if (days === 1) return "gestern";
+  if (days < 30) return `vor ${days} Tagen`;
+  const months = Math.round(days / 30.4);
+  if (months < 12) return months === 1 ? "vor einem Monat" : `vor ${months} Monaten`;
+  const years = Math.round(days / 365.25);
+  return years === 1 ? "vor einem Jahr" : `vor ${years} Jahren`;
+}
+
 function statusBadge(status) {
   const entry = STATUS_LABELS[status];
   if (!entry || !entry.text) return null;
@@ -228,24 +242,71 @@ function kindLabel(id) {
   return kind ? kind.label : id;
 }
 
+/* Sortierungen der Abo-Liste. Der Vergleich liefert immer eine Zahl, damit ein
+ * fehlendes Feld (nie geprueft, kein Datum) hinten landet statt die Reihenfolge
+ * zufaellig zu machen. */
+const SORTERS = {
+  added: (a, b) => (b.createdAtUnix || 0) - (a.createdAtUnix || 0),
+  title: (a, b) => a.title.localeCompare(b.title, "de"),
+  release: (a, b) => (b.latestReleaseUnix || 0) - (a.latestReleaseUnix || 0),
+  checked: (a, b) => (b.lastCheckUnix || 0) - (a.lastCheckUnix || 0),
+  progress: (a, b) =>
+    (b.knownChapters - b.downloadedChapters) - (a.knownChapters - a.downloadedChapters),
+  status: (a, b) =>
+    (STATUS_ORDER[statusKey(a)] ?? 9) - (STATUS_ORDER[statusKey(b)] ?? 9) ||
+    a.title.localeCompare(b.title, "de"),
+};
+
+/* Reihenfolge nach Dringlichkeit, nicht alphabetisch: was Aufmerksamkeit
+ * braucht, steht oben. */
+const STATUS_ORDER = {
+  licensed: 0,
+  ongoing: 1,
+  unknown: 2,
+  hiatus: 3,
+  dropped: 4,
+  completed: 5,
+  paused: 6,
+};
+
+/* Der eine Zustand, den ein Abo im Blick der Liste hat. „Pausiert" schlaegt
+ * alles: ein pausiertes Abo wird nicht geprueft, egal was die Quelle sagt. */
+function statusKey(item) {
+  if (!item.enabled) return "paused";
+  return item.seriesStatus || "unknown";
+}
+
 function visibleSubscriptions() {
   const needle = $("filter-input").value.trim().toLowerCase();
   const kind = $("kind-filter").value;
-  return subscriptions.filter((item) => {
+  const state = $("state-filter").value;
+  const items = subscriptions.filter((item) => {
     if (kind && item.mediaKind !== kind) return false;
+    if (state === "paused" && item.enabled) return false;
+    if (state === "active" && !item.enabled) return false;
+    if (state && state !== "paused" && state !== "active" && statusKey(item) !== state) {
+      return false;
+    }
     if (!needle) return true;
     return (
       item.title.toLowerCase().includes(needle) ||
       item.source.toLowerCase().includes(needle)
     );
   });
+  const sorter = SORTERS[$("sort-select").value] || SORTERS.added;
+  return items.sort(sorter);
 }
 
 /* Eine Kachel im Raster: Cover (oder Initiale), Titel darunter — zum Finden
  * nach dem Bild statt nach dem Namen. */
 function gridTile(item) {
-  const tile = el("button", "tile");
+  const tile = el("button", "tile" + (item.enabled ? "" : " is-paused"));
   tile.type = "button";
+  if (!item.enabled) {
+    // Im Raster gibt es keine Textzeile fuer Abzeichen — das Zeichen muss auf
+    // dem Bild sitzen, sonst sieht man den Zustand nur in der Liste.
+    tile.appendChild(el("span", "tile-flag", "⏸"));
+  }
   if (item.hasCover) {
     const img = el("img");
     img.src = coverUrl(item);
@@ -291,7 +352,7 @@ function renderSubscriptions() {
   }
 
   for (const item of items) {
-    const card = el("button", "card");
+    const card = el("button", "card" + (item.enabled ? "" : " is-paused"));
     card.type = "button";
 
     if (item.hasCover) {
@@ -311,7 +372,7 @@ function renderSubscriptions() {
     );
 
     const badges = el("div", "badges");
-    if (!item.enabled) badges.appendChild(el("span", "badge off", "pausiert"));
+    if (!item.enabled) badges.appendChild(el("span", "badge off", "⏸ pausiert"));
     // Der ermittelte Status schlaegt die Handschalter; nur solange keine Quelle
     // befragt wurde, zaehlen completed/hiatus.
     const badge = statusBadge(item.seriesStatus);
@@ -342,6 +403,12 @@ $("view-grid").addEventListener("click", () => setViewMode("grid"));
 
 $("filter-input").addEventListener("input", renderSubscriptions);
 $("kind-filter").addEventListener("change", renderSubscriptions);
+$("state-filter").addEventListener("change", renderSubscriptions);
+$("sort-select").addEventListener("change", () => {
+  localStorage.setItem("fero.sort", $("sort-select").value);
+  renderSubscriptions();
+});
+$("sort-select").value = localStorage.getItem("fero.sort") || "added";
 
 // ── Abo hinzufügen ───────────────────────────────────────────────────────
 
@@ -423,6 +490,16 @@ function openDetail(id) {
   if (item.translationDone !== undefined && item.translationDone !== null) {
     fact(facts, "Übersetzung", item.translationDone ? "vollständig" : "läuft noch");
   }
+  if (item.latestReleaseUnix) {
+    // Die Frage dahinter ist nicht das Datum, sondern „wie lange liegt das
+    // schon" — deshalb steht der Abstand daneben.
+    const date = new Date(item.latestReleaseUnix * 1000);
+    fact(
+      facts,
+      "Neuestes Kapitel bei der Quelle",
+      `${date.toLocaleDateString("de-DE")} (${sinceLabel(item.latestReleaseUnix)})`
+    );
+  }
   if (item.lastCheckUnix) {
     fact(facts, "Letzter Lauf", new Date(item.lastCheckUnix * 1000).toLocaleString("de-DE"));
   }
@@ -462,6 +539,9 @@ function openDetail(id) {
   setFeedback($("detail-login-feedback"), "");
   setFeedback($("detail-status-feedback"), "");
   $("detail-rebuild").hidden = item.kind !== "webnovel";
+  $("detail-anilist").hidden = !item.anilistUrl;
+  $("detail-mal").hidden = !item.malUrl;
+  $("detail-pause").checked = !item.enabled;
   renderDetailStatus(item);
   refreshLoginState();
   showView("detail");
@@ -518,6 +598,8 @@ const STATUS_SOURCE = {
 
 function renderDetailStatus(item) {
   const source = STATUS_SOURCE[item.kind] || STATUS_SOURCE.manga;
+  clear($("detail-search-hits"));
+  $("detail-search-query").value = "";
   $("detail-status").value = item.statusOverride || "auto";
   $("detail-status-source-hint").textContent = source.hint;
   const field = $("detail-status-url");
@@ -545,6 +627,93 @@ $("detail-status-save").addEventListener("click", async () => {
   } catch (error) {
     setFeedback(node, error.message, "error");
   }
+});
+
+/* Die Suche auf den Plattformen.
+ *
+ * Sie abonniert nichts: auf AniList und MyAnimeList stehen keine Kapitel, nur
+ * Eintraege ueber Werke. Was sie loest, ist die Zuordnung — welcher Eintrag
+ * gehoert zu meinem Download, wenn die Titel auseinandergehen. Ein Klick auf
+ * einen Treffer traegt ihn als Statusquelle ein.
+ *
+ * NovelUpdates fehlt bewusst: keine API, dazu Cloudflare davor. Eine Suche,
+ * die oft genug scheitert, ist schlechter als keine. NovelUpdates-Serien
+ * abonniert man direkt ueber ihre Seiten-URL. */
+async function runPlatformSearch() {
+  const item = currentItem();
+  if (!item) return;
+  const node = $("detail-status-feedback");
+  const hits = $("detail-search-hits");
+  const query = $("detail-search-query").value.trim();
+  if (!query) return;
+
+  clear(hits);
+  setFeedback(node, "Suche läuft …");
+  try {
+    const data = await api(
+      `platform-search?title=${encodeURIComponent(query)}&kind=${item.kind}`
+    );
+    const results = data.results || [];
+    if (results.length === 0) {
+      setFeedback(node, "Nichts gefunden. Anderen Titel versuchen?", "error");
+      return;
+    }
+    setFeedback(node, "");
+    for (const hit of results) {
+      hits.appendChild(searchHitRow(hit));
+    }
+  } catch (error) {
+    setFeedback(node, error.message, "error");
+  }
+}
+
+function searchHitRow(hit) {
+  const row = el("div", "search-hit");
+  if (hit.coverUrl) {
+    const img = el("img");
+    img.src = hit.coverUrl;
+    img.loading = "lazy";
+    img.alt = "";
+    row.appendChild(img);
+  }
+
+  const text = el("div", "grow");
+  text.appendChild(el("div", "card-title", hit.title));
+  const parts = [];
+  if (hit.status) parts.push(hit.status.toLowerCase().replace(/_/g, " "));
+  if (hit.malUrl) parts.push("auch auf MyAnimeList");
+  text.appendChild(el("div", "card-meta", parts.join(" · ")));
+  row.appendChild(text);
+
+  /* Zwei Knoepfe statt einer Auswahl: welche der beiden Plattformen als
+   * Statusquelle dient, ist Geschmackssache — beide beantworten dieselbe
+   * Frage, und der Eintrag ist derselbe. */
+  const buttons = el("div", "row");
+  for (const [label, url] of [
+    ["AniList übernehmen", hit.anilistUrl],
+    ["MAL übernehmen", hit.malUrl],
+  ]) {
+    if (!url) continue;
+    const button = el("button", "action", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      $("detail-status-url").value = url;
+      clear($("detail-search-hits"));
+      setFeedback(
+        $("detail-status-feedback"),
+        "Übernommen — noch auf Speichern klicken.",
+        "ok"
+      );
+    });
+    buttons.appendChild(button);
+  }
+  row.appendChild(buttons);
+  return row;
+}
+
+$("detail-search-go").addEventListener("click", runPlatformSearch);
+$("detail-search-query").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") runPlatformSearch();
 });
 
 $("detail-status-url-save").addEventListener("click", async () => {
@@ -760,12 +929,47 @@ $("detail-check").addEventListener("click", async () => {
   await startCheck(item.kind, item.id);
 });
 
-$("detail-source").addEventListener("click", async () => {
+/* Quelle und Plattformen im Systembrowser. Die Knoepfe stehen nur da, wenn es
+ * die Seite auch gibt — ein Knopf, der „nicht verlinkt" meldet, ist Ballast. */
+function openExternal(url) {
+  return api(`open-url?url=${encodeURIComponent(url)}`).catch((error) => {
+    setFeedback($("detail-feedback"), error.message, "error");
+  });
+}
+
+$("detail-source").addEventListener("click", () => {
+  const item = currentItem();
+  if (item) openExternal(item.url);
+});
+
+$("detail-anilist").addEventListener("click", () => {
+  const item = currentItem();
+  if (item && item.anilistUrl) openExternal(item.anilistUrl);
+});
+
+$("detail-mal").addEventListener("click", () => {
+  const item = currentItem();
+  if (item && item.malUrl) openExternal(item.malUrl);
+});
+
+/* Downloads fuer dieses eine Abo aussetzen. Es bleibt vollstaendig erhalten —
+ * nur die Sammellaeufe gehen daran vorbei, bis der Haken wieder weg ist. */
+$("detail-pause").addEventListener("change", async () => {
   const item = currentItem();
   if (!item) return;
+  const paused = $("detail-pause").checked;
   try {
-    await api(`open-url?url=${encodeURIComponent(item.url)}`);
+    await post(`${item.kind}/update`, { id: item.id, enabled: !paused });
+    await loadSubscriptions();
+    setFeedback(
+      $("detail-feedback"),
+      paused
+        ? `Pausiert. Dieses Abo wird bei „Alle prüfen" übersprungen.`
+        : "Wieder aktiv.",
+      "ok"
+    );
   } catch (error) {
+    $("detail-pause").checked = !paused;
     setFeedback($("detail-feedback"), error.message, "error");
   }
 });
@@ -831,63 +1035,117 @@ $("detail-delete").addEventListener("click", async () => {
 
 $("check-all").addEventListener("click", () => startCheck(null, null));
 
+/* Der gerade laufende Job, damit der Stopp-Knopf weiss, wen er meint. */
+let activeJob = null;
+
+const ENGINE_LABELS = { webnovel: "Webnovels", manga: "Manga" };
+
+/* Die beiden Engines nacheinander, nicht nur die erste.
+ *
+ * Vorher wurde nach dem ersten Job mit `return` abgebrochen — und weil die
+ * Webnovel-Pruefung immer eine Job-Id liefert, kam die Manga-Pruefung bei
+ * „Alle pruefen" nie an die Reihe. Wer nur Manga abonniert hatte, sah
+ * „Keine passenden Abonnements." und keinen einzigen Download. */
 async function startCheck(kind, id) {
   const kinds = kind ? [kind] : ["webnovel", "manga"];
+  const messages = [];
   try {
     for (const each of kinds) {
       const result = await post(`${each}/check`, id ? { id } : {});
-      if (result.jobId) {
-        pollJob(each, result.jobId);
-        return;
+      if (!result.jobId) continue;
+      const outcome = await runJob(each, result.jobId);
+      if (outcome.message) {
+        messages.push(
+          kinds.length > 1
+            ? `${ENGINE_LABELS[each]}: ${outcome.message}`
+            : outcome.message
+        );
       }
+      // Wer stoppt, meint den ganzen Lauf — nicht nur die halbe Haelfte davon.
+      if (outcome.stopped) break;
     }
-    status("Nichts zu tun — alle Abos sind aktuell.");
-    await loadSubscriptions();
+    status(messages.join(" · ") || "Nichts zu tun — alle Abos sind aktuell.");
   } catch (error) {
     status(error.message, true);
   }
+  await loadSubscriptions();
+  if (currentDetailId) openDetail(currentDetailId);
 }
 
-function pollJob(kind, jobId) {
-  clearInterval(jobTimer);
-  const banner = $("job-banner");
-  banner.hidden = false;
+/* Verfolgt einen Job bis zum Ende und loest mit seinem Schlusswort auf. */
+function runJob(kind, jobId) {
+  return new Promise((resolve) => {
+    clearInterval(jobTimer);
+    activeJob = { kind, jobId };
+    const banner = $("job-banner");
+    const stop = $("job-stop");
+    banner.hidden = false;
+    stop.disabled = false;
+    stop.textContent = "Stoppen";
 
-  const tick = async () => {
-    let data;
-    try {
-      data = await api(`${kind}/job?job_id=${encodeURIComponent(jobId)}`);
-    } catch (error) {
+    const finish = (outcome) => {
       clearInterval(jobTimer);
+      activeJob = null;
       banner.hidden = true;
-      status(error.message, true);
-      return;
-    }
+      resolve(outcome);
+    };
 
-    const job = data.status;
-    if (!job) return;
+    const tick = async () => {
+      let data;
+      try {
+        data = await api(`${kind}/job?job_id=${encodeURIComponent(jobId)}`);
+      } catch (error) {
+        status(error.message, true);
+        finish({ message: null, stopped: true });
+        return;
+      }
 
-    $("job-title").textContent = job.novelTitle || job.seriesTitle || "Prüfe …";
-    $("job-detail").textContent = job.totalChapters
-      ? `Kapitel ${job.currentChapter} von ${job.totalChapters} · ${job.downloaded} geladen`
-      : `${job.downloaded} geladen`;
-    const share = job.totalChapters
-      ? Math.round((job.currentChapter / job.totalChapters) * 100)
-      : 0;
-    $("job-bar-fill").style.width = `${Math.min(share, 100)}%`;
+      const job = data.status;
+      if (!job) return;
 
-    if (job.state !== "running") {
-      clearInterval(jobTimer);
-      banner.hidden = true;
-      status(job.message || "Lauf beendet.", job.state === "failed");
-      await loadSubscriptions();
-      if (currentDetailId) openDetail(currentDetailId);
-    }
-  };
+      $("job-title").textContent =
+        job.novelTitle || job.mangaTitle || job.seriesTitle || "Prüfe …";
+      $("job-detail").textContent = job.totalChapters
+        ? `Kapitel ${job.currentChapter} von ${job.totalChapters} · ${job.downloaded} geladen`
+        : `${job.downloaded} geladen`;
+      const share = job.totalChapters
+        ? Math.round((job.currentChapter / job.totalChapters) * 100)
+        : 0;
+      $("job-bar-fill").style.width = `${Math.min(share, 100)}%`;
+      // Zwischen zwei Kapiteln koennen Dutzende Bildabrufe liegen; ohne diese
+      // Rueckmeldung sieht der Klick aus, als waere nichts passiert.
+      if (job.cancelRequested) {
+        stop.disabled = true;
+        stop.textContent = "wird beendet …";
+      }
 
-  tick();
-  jobTimer = setInterval(tick, 900);
+      if (job.state !== "running") {
+        if (job.state === "failed") status(job.message || "Lauf fehlgeschlagen.", true);
+        finish({
+          message: job.state === "failed" ? null : job.message,
+          stopped: Boolean(job.cancelRequested),
+        });
+      }
+    };
+
+    tick();
+    jobTimer = setInterval(tick, 900);
+  });
 }
+
+$("job-stop").addEventListener("click", async () => {
+  if (!activeJob) return;
+  const stop = $("job-stop");
+  stop.disabled = true;
+  stop.textContent = "wird beendet …";
+  try {
+    await post(`${activeJob.kind}/stop`, { jobId: activeJob.jobId });
+  } catch (error) {
+    status(error.message, true);
+    stop.disabled = false;
+    stop.textContent = "Stoppen";
+  }
+});
 
 // ── Papierkorb ───────────────────────────────────────────────────────────
 

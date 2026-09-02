@@ -98,6 +98,9 @@ pub struct Subscription {
     /// AniList detail URL for the matched entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anilist_url: Option<String>,
+    /// MyAnimeList page for the same work, when AniList knew the cross-link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mal_url: Option<String>,
     /// Right-to-left reading order (Japanese manga).  Written into every
     /// chapter's `ComicInfo.xml`, so it is pinned on the subscription rather
     /// than re-derived per chapter.
@@ -166,6 +169,14 @@ pub struct Subscription {
     /// belongs to their translation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_source_url: Option<String>,
+    /// When the newest chapter went up at the source, where the source says.
+    ///
+    /// Distinct from `last_check_unix`, which says when *Fero* last looked.
+    /// This one answers the reader's question — how long has the newest
+    /// chapter been sitting there — and travels into `fero.info.json` so
+    /// Fundus can answer it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_release_unix: Option<u64>,
     /// UNIX timestamp of the last completed update check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_check_unix: Option<u64>,
@@ -246,6 +257,7 @@ impl Subscription {
             rating_external: None,
             anilist_id: None,
             anilist_url: None,
+            mal_url: None,
             right_to_left: false,
             completed: false,
             hiatus: false,
@@ -259,6 +271,7 @@ impl Subscription {
             delivered_to: None,
             batch_size: None,
             status_source_url: None,
+            latest_release_unix: None,
             known_chapters: Vec::new(),
             last_check_unix: None,
             last_error: None,

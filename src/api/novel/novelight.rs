@@ -105,6 +105,7 @@ fn parse_book_page(page_url: &str, body: &str) -> Result<NovelInfo> {
         cover_url: super::og_image(&html).map(|src| absolutize(page_url, &src)),
         description: first_text(&html, ".description"),
         completed_hint: None,
+        latest_release_unix: None,
         genres: Vec::new(),
         tags: collect_texts(&html, ".tag"),
         chapters,

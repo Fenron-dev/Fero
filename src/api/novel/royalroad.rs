@@ -112,6 +112,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
         cover_url,
         description,
         completed_hint,
+        latest_release_unix: None,
         genres: Vec::new(),
         tags,
         chapters,

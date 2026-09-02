@@ -357,6 +357,33 @@ body {
   color: var(--text-faint);
 }
 
+/* Pausierte Abos: gedaempft und mit einem Streifen an der Kante. Die Farbe
+ * allein reicht nicht — der Streifen bleibt auch dann erkennbar, wenn jemand
+ * Farben schlecht unterscheidet, und im Raster traegt zusaetzlich ein Symbol
+ * auf dem Cover. */
+.card.is-paused,
+.tile.is-paused {
+  opacity: 0.55;
+  border-left: 3px solid var(--warn);
+}
+
+.tile.is-paused {
+  position: relative;
+}
+
+.tile-flag {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #000000aa;
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -415,11 +442,76 @@ body {
 /* ── Auftragsfortschritt ───────────────────────────────────────────────── */
 
 .job-banner {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "text stop" "bar stop";
+  align-items: center;
+  column-gap: 12px;
   padding: 12px 14px;
   margin-bottom: var(--gap);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--bg-raised);
+}
+
+.job-banner .job-text {
+  grid-area: text;
+}
+
+.job-banner .job-bar {
+  grid-area: bar;
+}
+
+.job-banner #job-stop {
+  grid-area: stop;
+}
+
+/* Trefferliste der Plattformsuche: Cover links, Titel und Knoepfe daneben. */
+.search-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.search-hits:empty {
+  margin-top: 0;
+}
+
+.search-hit {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.search-hit img {
+  width: 40px;
+  height: 56px;
+  flex: none;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+/* Ein Schalter mit erklaerendem Satz daneben — der Satz gehoert ins Label,
+ * damit ein Klick darauf ebenfalls schaltet. */
+.toggle {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.toggle input {
+  margin-top: 2px;
+  flex: none;
 }
 
 .job-text {

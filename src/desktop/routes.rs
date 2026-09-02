@@ -53,6 +53,10 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             &build_save_schedule_response(request.body()),
             StatusCode::BAD_REQUEST,
         ),
+        "/api/platform-search" => json_outcome(
+            &build_platform_search_response(request.uri().query()),
+            StatusCode::BAD_REQUEST,
+        ),
         "/api/anilist-search" => json_outcome(
             &build_anilist_search_response(request.uri().query()),
             StatusCode::BAD_REQUEST,
@@ -144,6 +148,10 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             &build_webnovel_job_response(request.uri().query()),
             StatusCode::NOT_FOUND,
         ),
+        "/api/webnovel/stop" => json_outcome(
+            &build_webnovel_stop_response(request.body()),
+            StatusCode::NOT_FOUND,
+        ),
         // Manga subscriptions mirror the webnovel endpoints one for one; the
         // handlers live in `manga` to keep this file from growing.
         "/api/manga/list" => json_outcome(
@@ -168,6 +176,10 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         ),
         "/api/manga/job" => json_outcome(
             &manga::build_job_response(request.uri().query()),
+            StatusCode::NOT_FOUND,
+        ),
+        "/api/manga/stop" => json_outcome(
+            &manga::build_stop_response(request.body()),
             StatusCode::NOT_FOUND,
         ),
         "/api/manga/trash" => json_outcome(

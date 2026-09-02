@@ -20,6 +20,9 @@
 
 use scraper::{Html, Selector};
 
+use crate::api::release_date;
+use crate::core::subscription::unix_now;
+
 use super::{
     extract_chapter_number, extract_volume, tidy_text, MangaChapterRef, MangaInfo, MangaSource,
     PageImage,
@@ -68,17 +71,36 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
             FeroError::ExternalApi(format!("Madara: Titel nicht gefunden: {page_url}"))
         })?;
 
-    let chapter_selector = Selector::parse("li.wp-manga-chapter > a")
+    // Ueber das `li`, nicht ueber den Link: das Datum steht daneben, nicht
+    // darin, und ohne die Zeile als Ganzes waere es nicht erreichbar.
+    let row_selector = Selector::parse("li.wp-manga-chapter")
         .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
+    let link_selector = Selector::parse("a")
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
+    let date_selector = Selector::parse(".chapter-release-date")
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
+
+    let now = unix_now();
     let mut chapters = Vec::new();
+    let mut latest_release_unix: Option<u64> = None;
     let mut seen = std::collections::HashSet::new();
-    for link in html.select(&chapter_selector) {
+    for row in html.select(&row_selector) {
+        let Some(link) = row.select(&link_selector).next() else {
+            continue;
+        };
         let Some(href) = link.value().attr("href") else {
             continue;
         };
         let url = absolutize(page_url, href.trim());
         if !seen.insert(url.clone()) {
             continue;
+        }
+        if let Some(released) = row
+            .select(&date_selector)
+            .next()
+            .and_then(|node| release_date::parse_release(&node.text().collect::<String>(), now))
+        {
+            latest_release_unix = Some(latest_release_unix.unwrap_or(released).max(released));
         }
         let label = tidy_text(&link.text().collect::<String>());
         chapters.push(MangaChapterRef {
@@ -107,6 +129,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         cover_url: image_source(&html, ".summary_image img").map(|src| absolutize(page_url, &src)),
         description: first_text(&html, ".summary__content")
             .or_else(|| first_text(&html, ".description-summary")),
+        latest_release_unix,
         completed_hint: series_status(&html).map(|status| {
             let lower = status.to_lowercase();
             lower.contains("completed") || lower.contains("finished")

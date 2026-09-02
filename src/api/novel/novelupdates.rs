@@ -22,6 +22,7 @@ use super::{
     absolutize, generic::extract_best_content, ChapterContent, ChapterRef, NovelInfo, NovelSource,
     PoliteClient,
 };
+use crate::api::release_date;
 use crate::error::{FeroError, Result};
 
 /// NovelUpdates radar adapter.
@@ -89,9 +90,21 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
     let link_selector = Selector::parse("a.chp-release")
         .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
+    // Die erste Zelle jeder Zeile traegt das Release-Datum.
+    let cell_selector = Selector::parse("td")
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
+
     let mut chapters = Vec::new();
+    let mut latest_release_unix: Option<u64> = None;
     let mut seen = std::collections::HashSet::new();
     for row in html.select(&row_selector) {
+        if let Some(released) = row
+            .select(&cell_selector)
+            .next()
+            .and_then(|cell| release_date::parse_month_first_short(&cell.text().collect::<String>()))
+        {
+            latest_release_unix = Some(latest_release_unix.unwrap_or(released).max(released));
+        }
         for link in row.select(&link_selector) {
             let Some(href) = link.value().attr("href") else {
                 continue;
@@ -123,6 +136,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
         cover_url,
         description,
         completed_hint,
+        latest_release_unix,
         genres: collect_texts(&html, "#seriesgenre a"),
         tags: collect_texts(&html, "#showtags a"),
         chapters,

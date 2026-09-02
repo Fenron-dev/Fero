@@ -110,6 +110,7 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
         cover_url: og_image(html).map(|src| absolutize(page_url, &src)),
         description: first_text(html, ".summary"),
         completed_hint,
+        latest_release_unix: None,
         genres,
         tags: Vec::new(),
         chapters: Vec::new(),

@@ -41,6 +41,7 @@
         <span id="job-detail"></span>
       </div>
       <div class="job-bar"><div class="job-bar-fill" id="job-bar-fill"></div></div>
+      <button class="action ghost" id="job-stop">Stoppen</button>
     </div>
 
     <!-- Abo-Liste -->
@@ -56,6 +57,25 @@
           />
           <select id="kind-filter" class="input">
             <option value="">Alle Typen</option>
+          </select>
+          <select id="state-filter" class="input" title="Nach Zustand filtern">
+            <option value="">Alle Zustände</option>
+            <option value="active">nur aktive</option>
+            <option value="paused">nur pausierte</option>
+            <option value="ongoing">laufend</option>
+            <option value="completed">abgeschlossen</option>
+            <option value="hiatus">Hiatus</option>
+            <option value="dropped">abgebrochen</option>
+            <option value="licensed">lizenziert</option>
+            <option value="unknown">Status unbekannt</option>
+          </select>
+          <select id="sort-select" class="input" title="Sortierung">
+            <option value="added">zuletzt hinzugefügt</option>
+            <option value="title">Titel</option>
+            <option value="release">neuestes Kapitel</option>
+            <option value="checked">zuletzt geprüft</option>
+            <option value="progress">offene Kapitel</option>
+            <option value="status">Status</option>
           </select>
           <button class="action ghost" id="view-list" title="Listenansicht">Liste</button>
           <button class="action ghost" id="view-grid" title="Rasteransicht mit Covern">Raster</button>
@@ -92,6 +112,27 @@
 
       <div class="detail-grid">
         <p class="status-banner" id="detail-status-banner" hidden></p>
+
+        <div class="panel">
+          <p class="panel-label">Aktionen</p>
+          <div class="row wrap">
+            <button class="action primary" id="detail-check">Jetzt prüfen</button>
+            <button class="action" id="detail-open">Im Finder zeigen</button>
+            <button class="action" id="detail-source">Quelle öffnen</button>
+            <button class="action" id="detail-anilist">AniList</button>
+            <button class="action" id="detail-mal">MyAnimeList</button>
+            <button class="action" id="detail-rebuild">Dateien neu aufteilen</button>
+            <button class="action danger" id="detail-delete">Abo löschen</button>
+          </div>
+          <label class="toggle" id="detail-pause-row">
+            <input type="checkbox" id="detail-pause" />
+            <span>
+              Downloads pausieren — dieses Abo wird bei „Alle prüfen" übersprungen,
+              bis der Haken wieder weg ist. Geladene Dateien bleiben liegen.
+            </span>
+          </label>
+          <p class="feedback" id="detail-feedback"></p>
+        </div>
 
         <div class="panel">
           <p class="panel-label">Übersicht</p>
@@ -167,6 +208,16 @@
             <input type="url" id="detail-status-url" class="input grow" />
             <button class="action" id="detail-status-url-save">Speichern</button>
           </div>
+          <div class="row">
+            <input
+              type="search"
+              id="detail-search-query"
+              class="input grow"
+              placeholder="Auf AniList / MyAnimeList suchen …"
+            />
+            <button class="action" id="detail-search-go">Suchen</button>
+          </div>
+          <div class="search-hits" id="detail-search-hits"></div>
           <p class="feedback" id="detail-status-feedback"></p>
         </div>
 
@@ -186,17 +237,6 @@
           <p class="feedback" id="detail-login-feedback"></p>
         </div>
 
-        <div class="panel">
-          <p class="panel-label">Aktionen</p>
-          <div class="row wrap">
-            <button class="action primary" id="detail-check">Jetzt prüfen</button>
-            <button class="action" id="detail-open">Im Finder zeigen</button>
-            <button class="action" id="detail-source">Quelle öffnen</button>
-            <button class="action" id="detail-rebuild">Dateien neu aufteilen</button>
-            <button class="action danger" id="detail-delete">Abo löschen</button>
-          </div>
-          <p class="feedback" id="detail-feedback"></p>
-        </div>
       </div>
     </section>
 

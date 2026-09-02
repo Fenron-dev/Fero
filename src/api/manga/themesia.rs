@@ -28,6 +28,8 @@ use super::{
     PageImage,
 };
 use crate::api::novel::{absolutize, PoliteClient};
+use crate::api::release_date;
+use crate::core::subscription::unix_now;
 use crate::error::{FeroError, Result};
 
 /// Themesia-theme adapter.
@@ -72,8 +74,12 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
     let number_selector = Selector::parse(".chapternum")
         .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
+    let date_selector = Selector::parse(".chapterdate")
+        .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
 
+    let now = unix_now();
     let mut chapters = Vec::new();
+    let mut latest_release_unix: Option<u64> = None;
     let mut seen = std::collections::HashSet::new();
     for link in html.select(&chapter_selector) {
         let Some(href) = link.value().attr("href") else {
@@ -82,6 +88,13 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         let url = absolutize(page_url, href.trim());
         if !seen.insert(url.clone()) {
             continue;
+        }
+        if let Some(released) = link
+            .select(&date_selector)
+            .next()
+            .and_then(|node| release_date::parse_release(&node.text().collect::<String>(), now))
+        {
+            latest_release_unix = Some(latest_release_unix.unwrap_or(released).max(released));
         }
         // `.chapternum` holds just the label; the anchor also contains the date.
         let label = link
@@ -114,6 +127,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
             .map(|src| absolutize(page_url, &src)),
         description: first_text(&html, ".entry-content-single")
             .or_else(|| first_text(&html, "[itemprop='description']")),
+        latest_release_unix,
         completed_hint: first_text(&html, ".status, .imptdt i")
             .map(|status| status.to_lowercase().contains("completed")),
         genres: collect_texts(&html, ".mgen a, .seriestugenre a"),

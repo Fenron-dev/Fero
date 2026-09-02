@@ -59,6 +59,12 @@ pub struct MangaInfo {
     pub description: Option<String>,
     /// `Some(true)` when the source marks the series as finished.
     pub completed_hint: Option<bool>,
+    /// When the newest chapter went up at the source, where the page says so.
+    ///
+    /// The newest rather than one per chapter: the question this answers is
+    /// "is this series still alive", and that is a property of the series. Not
+    /// every source prints dates, so `None` is a normal answer.
+    pub latest_release_unix: Option<u64>,
     /// Genre names as listed by the source (may be empty).
     pub genres: Vec<String>,
     /// Free-form tags as listed by the source (may be empty).

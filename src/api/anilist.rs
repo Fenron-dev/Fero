@@ -497,6 +497,28 @@ impl AniListClient {
         ))
     }
 
+    /// Every candidate for a title, unfiltered — for a person to pick from.
+    ///
+    /// Deliberately skips [`titles_match`]: the guard exists because *Fero*
+    /// must not choose on a hunch. A reader looking at a list with covers and
+    /// titles is a better judge than any similarity score, and the near-misses
+    /// are exactly what they need to see.
+    ///
+    /// # Errors
+    /// - `FeroError::ExternalApi` on transport failures or non-2xx responses
+    pub fn search_candidates(
+        &self,
+        search: &str,
+        comics: bool,
+    ) -> Result<Vec<AniListNovelMetadata>> {
+        let query = if comics {
+            ANILIST_MANGA_QUERY
+        } else {
+            ANILIST_NOVEL_QUERY
+        };
+        self.query_novel_shaped(query, serde_json::json!({ "search": search }))
+    }
+
     /// Fetches one entry by AniList id.
     ///
     /// No title matching happens here, and none should: the id comes from a
@@ -1381,6 +1403,15 @@ impl AniListNovelMetadata {
                 .and_then(|cover| cover.extra_large.or(cover.large)),
         }
     }
+}
+
+/// The MyAnimeList page for a MAL id.
+///
+/// A function rather than a stored second URL: AniList hands out the id, the
+/// address is a constant, and two fields that must agree are one more thing to
+/// keep in step.
+pub fn myanimelist_url(mal_id: u32) -> String {
+    format!("https://myanimelist.net/manga/{mal_id}")
 }
 
 /// The first candidate whose title plausibly names the work being looked up.

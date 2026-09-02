@@ -108,6 +108,12 @@ pub(crate) struct MangaJobStatus {
     total_pages: usize,
     /// Chapters completed so far across the whole job.
     downloaded: usize,
+    /// Set once the user asked for the run to stop.
+    ///
+    /// Visible to the frontend so the button can say "wird beendet …" instead
+    /// of looking like the click did nothing — between two chapters there can
+    /// be dozens of page requests still in flight.
+    cancel_requested: bool,
     /// Final summary or error message once the job is terminal.
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
@@ -126,6 +132,7 @@ impl MangaJobStatus {
             current_page: 0,
             total_pages: 0,
             downloaded: 0,
+            cancel_requested: false,
             message: None,
             finished_at_unix: None,
         }
@@ -134,6 +141,38 @@ impl MangaJobStatus {
     fn is_terminal(&self) -> bool {
         self.state != "running"
     }
+}
+
+/// Whether the user asked this job to stop.
+///
+/// Checked between chapters rather than between pages: a half-written CBZ is
+/// worse than one more chapter, and a chapter is the unit the resume logic
+/// already knows how to pick up again.
+fn cancel_requested(job_id: &str) -> bool {
+    MANGA_JOBS
+        .lock()
+        .ok()
+        .and_then(|jobs| jobs.get(job_id).map(|status| status.cancel_requested))
+        .unwrap_or(false)
+}
+
+/// Marks one running job — or every one — as asked to stop.
+///
+/// Returns how many jobs were flagged, so the caller can tell the user whether
+/// anything was actually running.
+fn request_cancel(job_id: Option<&str>) -> usize {
+    let Ok(mut jobs) = MANGA_JOBS.lock() else {
+        return 0;
+    };
+    let mut flagged = 0usize;
+    for (id, status) in jobs.iter_mut() {
+        if status.is_terminal() || !job_id.is_none_or(|wanted| wanted == id.as_str()) {
+            continue;
+        }
+        status.cancel_requested = true;
+        flagged += 1;
+    }
+    flagged
 }
 
 /// Applies a mutation to a job's status under the registry lock.
@@ -213,6 +252,9 @@ pub(crate) struct MangaSubscriptionSummary {
     tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     anilist_url: Option<String>,
+    /// MyAnimeList page for the same work, when AniList knew the cross-link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mal_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
     /// Delivery target set for this subscription alone, when there is one.
@@ -243,11 +285,16 @@ pub(crate) struct MangaSubscriptionSummary {
     /// The database entry the status is read from, when one is known.
     #[serde(skip_serializing_if = "Option::is_none")]
     status_source_url: Option<String>,
+    /// When the newest chapter went up at the source, where the source says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_release_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status_checked_at: Option<u64>,
     enabled: bool,
     known_chapters: usize,
     downloaded_chapters: usize,
+    /// When the subscription was added — the "zuletzt hinzugefügt" sort.
+    created_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_check_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,6 +331,7 @@ impl MangaSubscriptionSummary {
             genres: subscription.genres.clone(),
             tags: subscription.tags.clone(),
             anilist_url: subscription.anilist_url.clone(),
+            mal_url: subscription.mal_url.clone(),
             rating_external: subscription.rating_external,
             target_dir: subscription.target_dir.clone(),
             media_kind: kind,
@@ -298,9 +346,11 @@ impl MangaSubscriptionSummary {
             needs_attention: subscription.effective_status().needs_attention(),
             status_source_url: subscription.status_source_url.clone(),
             status_checked_at: subscription.status_checked_at,
+            latest_release_unix: subscription.latest_release_unix,
             enabled: subscription.enabled,
             known_chapters: subscription.known_chapters.len(),
             downloaded_chapters: subscription.downloaded_count(),
+            created_at_unix: subscription.created_at_unix,
             last_check_unix: subscription.last_check_unix,
             last_error: subscription.last_error.clone(),
         }
@@ -510,6 +560,13 @@ fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo) {
     // seine Entscheidung nach jedem Prueflauf erneut zu treffen.
     if info.completed_hint == Some(true) && subscription.status_override.is_none() {
         subscription.completed = true;
+    }
+    // Nur vorwaerts: verschwindet ein Datum aus der Seite oder liest ein Lauf
+    // eine gekuerzte Liste, bleibt der zuletzt bekannte Stand stehen.
+    if let Some(released) = info.latest_release_unix {
+        if subscription.latest_release_unix.is_none_or(|known| released > known) {
+            subscription.latest_release_unix = Some(released);
+        }
     }
     // The adapter knows the reading direction (manga vs. manhwa/webtoon);
     // it must reach every chapter archive, not just the first.
@@ -910,6 +967,29 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
     }
 }
 
+/// Asks a running check to stop.
+///
+/// Without a `job_id` every running manga job is flagged. Nothing is undone:
+/// chapters already written stay written, and the next run picks up where this
+/// one left off — stopping is "genug für jetzt", not "mach es rückgängig".
+pub(crate) fn build_stop_response(body: &[u8]) -> MangaSimpleResponse {
+    let job_id = serde_json::from_slice::<StopRequest>(body)
+        .ok()
+        .and_then(|req| req.job_id);
+    match request_cancel(job_id.as_deref()) {
+        0 => MangaSimpleResponse::error("Es läuft gerade keine Manga-Prüfung."),
+        _ => MangaSimpleResponse::ok(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StopRequest {
+    /// The one job to stop; omitted stops every running one.
+    #[serde(default)]
+    job_id: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MangaJobResponse {
@@ -1003,7 +1083,12 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
     let mut new_chapters = 0usize;
     let mut failures = 0usize;
 
+    let mut stopped = false;
     for mut subscription in selected {
+        if cancel_requested(job_id) {
+            stopped = true;
+            break;
+        }
         update_job(job_id, |status| {
             status.manga_title = subscription.title.clone();
             status.current_chapter = 0;
@@ -1026,7 +1111,11 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
         save_subscription(system_dir, &subscription)?;
     }
 
-    let mut message = format!("{new_chapters} neue Kapitel geladen.");
+    let mut message = if stopped || cancel_requested(job_id) {
+        format!("Abgebrochen. {new_chapters} neue Kapitel geladen.")
+    } else {
+        format!("{new_chapters} neue Kapitel geladen.")
+    };
     if failures > 0 {
         message.push_str(&format!(" {failures} Abo(s) mit Fehlern."));
     }
@@ -1142,6 +1231,12 @@ fn check_one(
     let mut fetch_error: Option<FeroError> = None;
 
     for (position, chapter_position) in pending.iter().enumerate() {
+        // Zwischen Kapiteln, nicht zwischen Seiten: eine halbe CBZ waere
+        // schlimmer als ein Kapitel zu viel, und das Kapitel ist die Einheit,
+        // die der naechste Lauf ohnehin wieder aufgreift.
+        if cancel_requested(job_id) {
+            break;
+        }
         update_job(job_id, |status| {
             status.current_chapter = position + 1;
             status.current_page = 0;
@@ -1291,6 +1386,9 @@ fn refresh_series_status(
                     subscription.status_source_url = Some(url.to_string());
                 }
             }
+            if entry.mal_url.is_some() {
+                subscription.mal_url = entry.mal_url.clone();
+            }
             entry.publication
         }
         Ok(None) => {
@@ -1407,6 +1505,7 @@ fn enrich_from_anilist(subscription: &mut Subscription) {
     };
     subscription.anilist_id = Some(manga.anilist_id);
     subscription.anilist_url = manga.anilist_url.clone();
+    subscription.mal_url = manga.mal_id.map(crate::api::anilist::myanimelist_url);
     if subscription.description.is_none() {
         subscription.description = manga.description.clone();
     }
@@ -1569,6 +1668,7 @@ fn manifest_bookkeeping(series_dir: &Path, subscription: &Subscription) -> manif
         known => known,
     };
     record.last_check_unix = Some(unix_now());
+    record.latest_release_unix = subscription.latest_release_unix;
     record.chapters = subscription
         .known_chapters
         .iter()

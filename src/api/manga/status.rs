@@ -40,6 +40,12 @@ pub struct ComicEntry {
     pub title: Option<String>,
     /// Link to the entry, so a match found by search can be pinned afterwards.
     pub url: Option<String>,
+    /// MyAnimeList page for the same work, when the database cross-links it.
+    ///
+    /// Carried along because the status run is the one moment Fero is holding
+    /// the database entry anyway — asking again later would be a request for
+    /// something it already had.
+    pub mal_url: Option<String>,
 }
 
 /// A database a pinned status-source URL can point at.
@@ -100,6 +106,7 @@ pub fn search(title: &str) -> Result<Option<ComicEntry>> {
         publication: classify(hit.status.as_deref().unwrap_or_default()),
         title: hit.title,
         url: hit.anilist_url,
+        mal_url: hit.mal_id.map(crate::api::anilist::myanimelist_url),
     }))
 }
 
@@ -139,6 +146,7 @@ fn fetch_anilist(id: u32) -> Result<ComicEntry> {
         publication: classify(entry.status.as_deref().unwrap_or_default()),
         title: entry.title,
         url: entry.anilist_url,
+        mal_url: entry.mal_id.map(crate::api::anilist::myanimelist_url),
     })
 }
 
@@ -161,6 +169,9 @@ fn parse_jikan(body: &str, id: u32) -> Result<ComicEntry> {
     Ok(ComicEntry {
         publication: classify(data.status.as_deref().unwrap_or_default()),
         title: data.title,
+        // Der Eintrag *ist* die MyAnimeList-Seite; die Datenbank ihrerseits
+        // verweist nicht zurueck auf AniList.
+        mal_url: data.url.clone(),
         url: data.url,
     })
 }

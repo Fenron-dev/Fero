@@ -163,6 +163,7 @@ fn parse_list_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         genres: collect_texts(&html, ".detail_header .genre"),
         tags: Vec::new(),
         // Webtoons are read top-to-bottom, left-to-right.
+        latest_release_unix: None,
         right_to_left: false,
         chapters,
     })

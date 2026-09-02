@@ -57,6 +57,7 @@ const PROTOCOL_SCHEME: &str = "fero";
 // Die beiden Fenster-Antworten deklarieren ihr Outcome in browser.rs.
 impl_outcome!(
     AniListSearchResponse,
+    PlatformSearchResponse,
     ImportResponse,
     ScheduleResponse,
     SelectFolderResponse,
@@ -195,6 +196,49 @@ fn build_anilist_search_response(query: Option<&str>) -> AniListSearchResponse {
     }
 }
 
+/// Searches AniList for a work, so the user can pick the right entry.
+///
+/// Answers the "welcher Eintrag gehoert zu meinem Download" question that no
+/// automatic match can settle: the titles drift apart between scanlation sites
+/// and databases, and only the reader knows which series they are following.
+/// One request yields both platform links — AniList hands out the MyAnimeList
+/// id alongside its own.
+///
+/// NovelUpdates is deliberately absent. It has no API and sits behind
+/// Cloudflare; a search there would fail often enough to be worse than not
+/// offering it. Its series pages are subscribed to directly instead.
+fn build_platform_search_response(query: Option<&str>) -> PlatformSearchResponse {
+    let Some(query) = query else {
+        return PlatformSearchResponse::error("missing query");
+    };
+    let Some(title) = extract_query_value(query, "title").filter(|title| !title.trim().is_empty())
+    else {
+        return PlatformSearchResponse::error("Bitte einen Titel eingeben.");
+    };
+    // Comics and light novels live under the same AniList type and are told
+    // apart only by format, so the caller has to say which shelf it means.
+    let comics = extract_query_value(query, "kind")
+        .map(|kind| kind != "webnovel")
+        .unwrap_or(true);
+
+    match AniListClient::default().search_candidates(&title, comics) {
+        Ok(results) => PlatformSearchResponse {
+            results: results
+                .into_iter()
+                .map(|hit| PlatformHit {
+                    title: hit.title.unwrap_or_else(|| "ohne Titel".to_string()),
+                    anilist_url: hit.anilist_url,
+                    mal_url: hit.mal_id.map(crate::api::anilist::myanimelist_url),
+                    status: hit.status,
+                    cover_url: hit.cover_url,
+                })
+                .collect(),
+            error: None,
+        },
+        Err(error) => PlatformSearchResponse::error(error.to_string()),
+    }
+}
+
 fn build_select_folder_response() -> SelectFolderResponse {
     let selected = rfd::FileDialog::new().pick_folder();
     SelectFolderResponse {
@@ -253,6 +297,38 @@ impl AniListSearchResponse {
             metadata: None,
             results: Vec::new(),
             error: Some(error),
+        }
+    }
+}
+
+/// One search hit, reduced to what the picker shows and stores.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformHit {
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anilist_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mal_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cover_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformSearchResponse {
+    results: Vec<PlatformHit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl PlatformSearchResponse {
+    fn error(error: impl Into<String>) -> Self {
+        Self {
+            results: Vec::new(),
+            error: Some(error.into()),
         }
     }
 }

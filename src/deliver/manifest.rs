@@ -76,6 +76,14 @@ pub struct WorkManifest {
     /// Unix timestamp of the last check against the source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_check_unix: Option<u64>,
+    /// When the newest chapter went up at the source, where the source says.
+    ///
+    /// Distinct from `last_check_unix`, which is about Fero. This one is about
+    /// the work, which is why it belongs in the manifest at all: Fundus shows
+    /// the folder, and "letztes Kapitel vor drei Tagen" is a fact about the
+    /// series that only the fetching side ever gets to see.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_release_unix: Option<u64>,
     /// Files Fero wrote here, newest last.
     #[serde(default)]
     pub files: Vec<DeliveredFile>,
@@ -100,6 +108,7 @@ impl WorkManifest {
             title: title.into(),
             status: SeriesStatus::Unknown,
             last_check_unix: None,
+            latest_release_unix: None,
             files: Vec::new(),
             chapters: Vec::new(),
         }

@@ -175,6 +175,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         completed_hint: Some(status_text.to_lowercase().contains("completed")),
         genres: collect_texts(&html, ".detail-info-right-tag-list a"),
         tags: Vec::new(),
+        latest_release_unix: None,
         right_to_left: true,
         chapters,
     })

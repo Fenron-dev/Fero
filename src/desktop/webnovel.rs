@@ -70,6 +70,12 @@ pub(super) struct WebnovelJobStatus {
     total_chapters: usize,
     /// Chapters downloaded so far across the whole job.
     downloaded: usize,
+    /// Set once the user asked for the run to stop.
+    ///
+    /// Visible to the frontend so the button can say "wird beendet …" instead
+    /// of looking like the click did nothing — a chapter in flight still has
+    /// to finish before the loop looks at this again.
+    cancel_requested: bool,
     /// Final summary or error message once the job is terminal.
     ///
     /// Visible to the browser module, which reports the fetch state into the
@@ -89,6 +95,7 @@ impl WebnovelJobStatus {
             current_chapter: 0,
             total_chapters: 0,
             downloaded: 0,
+            cancel_requested: false,
             message: None,
             finished_at_unix: None,
         }
@@ -98,6 +105,38 @@ impl WebnovelJobStatus {
     fn is_terminal(&self) -> bool {
         self.state != "running"
     }
+}
+
+/// Whether the user asked this job to stop.
+///
+/// Checked between chapters: a chapter is the unit the resume logic already
+/// knows how to pick up again, and a half-written one would have to be
+/// re-fetched anyway.
+fn cancel_requested(job_id: &str) -> bool {
+    WEBNOVEL_JOBS
+        .lock()
+        .ok()
+        .and_then(|jobs| jobs.get(job_id).map(|status| status.cancel_requested))
+        .unwrap_or(false)
+}
+
+/// Marks one running job — or every one — as asked to stop.
+///
+/// Returns how many jobs were flagged, so the caller can tell the user whether
+/// anything was actually running.
+fn request_cancel(job_id: Option<&str>) -> usize {
+    let Ok(mut jobs) = WEBNOVEL_JOBS.lock() else {
+        return 0;
+    };
+    let mut flagged = 0usize;
+    for (id, status) in jobs.iter_mut() {
+        if status.is_terminal() || !job_id.is_none_or(|wanted| wanted == id.as_str()) {
+            continue;
+        }
+        status.cancel_requested = true;
+        flagged += 1;
+    }
+    flagged
 }
 
 /// How long a finished job stays pollable before it is dropped.
@@ -169,6 +208,9 @@ struct WebnovelSubscriptionSummary {
     goodreads_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     anilist_url: Option<String>,
+    /// MyAnimeList page for the same work, when AniList knew the cross-link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mal_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_external: Option<f32>,
     /// Delivery target set for this subscription alone, when there is one.
@@ -185,6 +227,9 @@ struct WebnovelSubscriptionSummary {
     /// UNIX timestamp of the last status check.
     #[serde(skip_serializing_if = "Option::is_none")]
     status_checked_at: Option<u64>,
+    /// When the newest chapter went up at the source, where the source says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_release_unix: Option<u64>,
     /// Whether the translation is finished, when the source says so.
     #[serde(skip_serializing_if = "Option::is_none")]
     translation_done: Option<bool>,
@@ -212,6 +257,8 @@ struct WebnovelSubscriptionSummary {
     enabled: bool,
     known_chapters: usize,
     downloaded_chapters: usize,
+    /// When the subscription was added — the "zuletzt hinzugefügt" sort.
+    created_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_check_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,12 +297,14 @@ impl WebnovelSubscriptionSummary {
             tags: subscription.tags.clone(),
             goodreads_url: subscription.goodreads_url.clone(),
             anilist_url: subscription.anilist_url.clone(),
+            mal_url: subscription.mal_url.clone(),
             rating_external: subscription.rating_external,
             target_dir: subscription.target_dir.clone(),
             series_status: subscription.effective_status(),
             status_override: subscription.status_override,
             needs_attention: subscription.effective_status().needs_attention(),
             status_checked_at: subscription.status_checked_at,
+            latest_release_unix: subscription.latest_release_unix,
             translation_done: subscription.translation_done,
             media_kind: kind,
             download_limit: subscription.download_limit,
@@ -268,6 +317,7 @@ impl WebnovelSubscriptionSummary {
             enabled: subscription.enabled,
             known_chapters: subscription.known_chapters.len(),
             downloaded_chapters: subscription.downloaded_count(),
+            created_at_unix: subscription.created_at_unix,
             last_check_unix: subscription.last_check_unix,
             last_error: subscription.last_error.clone(),
         }
@@ -942,6 +992,29 @@ pub(super) fn start_scheduled_check() -> bool {
     true
 }
 
+/// Asks a running check to stop.
+///
+/// Without a `jobId` every running webnovel job is flagged. Nothing is undone:
+/// cached chapters stay cached and the next run continues where this one
+/// stopped — "genug für jetzt", nicht "mach es rückgängig".
+pub(super) fn build_webnovel_stop_response(body: &[u8]) -> SimpleResponse {
+    let job_id = serde_json::from_slice::<WebnovelStopRequest>(body)
+        .ok()
+        .and_then(|req| req.job_id);
+    match request_cancel(job_id.as_deref()) {
+        0 => SimpleResponse::error("Es läuft gerade keine Webnovel-Prüfung."),
+        _ => SimpleResponse::ok(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebnovelStopRequest {
+    /// The one job to stop; omitted stops every running one.
+    #[serde(default)]
+    job_id: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct WebnovelJobResponse {
@@ -1034,7 +1107,12 @@ fn run_webnovel_check(
     let mut new_chapters = 0usize;
     let mut failures = 0usize;
 
+    let mut stopped = false;
     for mut subscription in selected {
+        if cancel_requested(job_id) {
+            stopped = true;
+            break;
+        }
         // Whitelisted hosts need the visible browser window and the user's
         // presence — never touch them in automatic (startup/interval) runs.
         if !options.manual && is_webview_routed(&subscription.url) {
@@ -1074,7 +1152,11 @@ fn run_webnovel_check(
     }
     set_current_job_id(None);
 
-    let mut message = format!("{new_chapters} neue Kapitel geladen.");
+    let mut message = if stopped || cancel_requested(job_id) {
+        format!("Abgebrochen. {new_chapters} neue Kapitel geladen.")
+    } else {
+        format!("{new_chapters} neue Kapitel geladen.")
+    };
     if failures > 0 {
         message.push_str(&format!(" {failures} Abo(s) mit Fehlern."));
     }
@@ -1205,6 +1287,13 @@ fn check_one_subscription(
     if info.completed_hint == Some(true) && subscription.status_override.is_none() {
         subscription.completed = true;
     }
+    // Nur vorwaerts: verschwindet ein Datum aus der Seite oder liest ein Lauf
+    // eine gekuerzte Liste, bleibt der zuletzt bekannte Stand stehen.
+    if let Some(released) = info.latest_release_unix {
+        if subscription.latest_release_unix.is_none_or(|known| released > known) {
+            subscription.latest_release_unix = Some(released);
+        }
+    }
 
     // Metadata enrichment order: source site → Goodreads (per mode) →
     // AniList NOVEL lookup for any gaps that remain.
@@ -1314,6 +1403,11 @@ fn check_one_subscription(
     let mut consecutive_failures = 0usize;
     let mut skipped_chapters = 0usize;
     for (position, chapter_position) in pending.iter().enumerate() {
+        // Zwischen Kapiteln abbrechen: was schon im Zwischenspeicher liegt,
+        // bleibt liegen, und der naechste Lauf setzt genau hier fort.
+        if cancel_requested(job_id) {
+            break;
+        }
         update_webnovel_job(job_id, |status| {
             status.current_chapter = position + 1;
         });
@@ -1535,6 +1629,7 @@ pub(super) fn enrich_from_anilist(subscription: &mut Subscription) {
     };
     subscription.anilist_id = Some(novel.anilist_id);
     subscription.anilist_url = novel.anilist_url.clone();
+    subscription.mal_url = novel.mal_id.map(crate::api::anilist::myanimelist_url);
     if subscription.description.is_none() {
         subscription.description = novel.description.clone();
     }
@@ -1891,6 +1986,7 @@ fn manifest_bookkeeping(work_dir: &Path, subscription: &Subscription) -> manifes
         known => known,
     };
     record.last_check_unix = Some(unix_now());
+    record.latest_release_unix = subscription.latest_release_unix;
     record.chapters = subscription
         .known_chapters
         .iter()

@@ -51,6 +51,11 @@ pub struct NovelInfo {
     pub description: Option<String>,
     /// `Some(true)` when the source marks the novel as finished.
     pub completed_hint: Option<bool>,
+    /// When the newest chapter went up at the source, where the page says so.
+    ///
+    /// Only NovelUpdates prints release dates reliably; everywhere else this
+    /// stays `None`, which is a normal answer rather than a gap to fill in.
+    pub latest_release_unix: Option<u64>,
     /// Genre names as listed by the source (may be empty).
     pub genres: Vec<String>,
     /// Free-form tags as listed by the source (may be empty).

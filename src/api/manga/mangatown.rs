@@ -111,6 +111,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         tags: Vec::new(),
         // MangaTown hosts Japanese manga; scanlations keep the original
         // right-to-left page order.
+        latest_release_unix: None,
         right_to_left: true,
         chapters,
     })
