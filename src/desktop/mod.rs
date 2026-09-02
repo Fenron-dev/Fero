@@ -176,9 +176,11 @@ pub(crate) fn run() -> Result<()> {
             tauri::WebviewWindowBuilder::new(
                 app,
                 tray::MAIN_WINDOW,
-                tauri::WebviewUrl::External(app_url().parse().map_err(|error| {
-                    format!("Fensteradresse nicht lesbar: {error}")
-                })?),
+                tauri::WebviewUrl::External(
+                    app_url()
+                        .parse()
+                        .map_err(|error| format!("Fensteradresse nicht lesbar: {error}"))?,
+                ),
             )
             .title("Fero")
             .inner_size(1440.0, 900.0)
