@@ -11,7 +11,11 @@
  * Seiten und sind nicht vertrauenswürdig.
  */
 
-const API = "fero://localhost/api";
+/* Die eigene Herkunft, nicht eine feste Adresse: macOS und Linux liefern die
+ * Seite unter `fero://localhost`, Windows unter `http://fero.localhost` — das
+ * eine fest zu verdrahten hiesse, auf der anderen Plattform ins Leere zu
+ * greifen. */
+const API = `${location.protocol}//${location.host}/api`;
 
 /* Medientypen kommen vom Backend (MediaKind::ALL), damit ein neuer Typ hier
  * nichts zu ändern verlangt. Bis /api/targets geantwortet hat, steht die Liste

@@ -127,3 +127,40 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  build-windows:
+    name: Windows-Installer bauen
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust-Toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: tauri-cli installieren
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # `--bundles nsis` statt der Zielliste aus tauri.conf.json: die steht auf
+      # dmg, und ein Ziel, das es auf dieser Plattform nicht gibt, bricht den
+      # Bundler ab. Der Schalter ueberstimmt die Datei nur fuer diesen Lauf.
+      #
+      # Nicht signiert: dafuer braeuchte es ein Windows-Code-Signing-
+      # Zertifikat. SmartScreen wird beim ersten Start warnen.
+      - name: Build (NSIS-Installer)
+        run: cargo tauri build --bundles nsis
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fero-Windows-Installer
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Release anhaengen (nur bei Tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/nsis/*-setup.exe

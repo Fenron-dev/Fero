@@ -29,8 +29,11 @@ static SCHEDULE_PAUSED: AtomicBool = AtomicBool::new(false);
 /// UNIX timestamp of the last scheduled run.
 static LAST_SCHEDULED_RUN: AtomicU64 = AtomicU64::new(0);
 
-/// Label of the main window, as declared in `tauri.conf.json`.
-const MAIN_WINDOW: &str = "main";
+/// Label of the main window.
+///
+/// Lives here rather than in `tauri.conf.json`: the window is built in code
+/// because its address differs per platform, and both places need the label.
+pub(super) const MAIN_WINDOW: &str = "main";
 
 /// Builds the tray icon and starts the timer.
 ///

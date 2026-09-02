@@ -124,6 +124,26 @@ const INDEX_HTML: &str = include_str!("../../dist/index.html");
 const APP_JS: &str = include_str!("../../dist/app.js");
 const STYLES_CSS: &str = include_str!("../../dist/styles.css");
 
+/// The address the main window loads.
+///
+/// Windows serves a custom URI scheme as `http://<scheme>.localhost`, every
+/// other platform as `<scheme>://localhost`. The difference is why the window
+/// is built in code: `tauri.conf.json` holds one string for all platforms, and
+/// on Windows that string would point nowhere — a blank window with no error.
+///
+/// The frontend must not hardcode either form; it derives its API base from
+/// `window.location`.
+fn app_url() -> String {
+    #[cfg(windows)]
+    {
+        format!("http://{PROTOCOL_SCHEME}.localhost/index.html")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{PROTOCOL_SCHEME}://localhost/index.html")
+    }
+}
+
 /// Starts the Tauri desktop shell.
 pub(crate) fn run() -> Result<()> {
     tauri::Builder::default()
@@ -150,6 +170,22 @@ pub(crate) fn run() -> Result<()> {
             },
         )
         .setup(|app| {
+            // Das Fenster entsteht hier statt in tauri.conf.json, weil seine
+            // Adresse von der Plattform abhaengt — siehe `app_url`. Eine
+            // JSON-Datei kann diese Verzweigung nicht ausdruecken.
+            tauri::WebviewWindowBuilder::new(
+                app,
+                tray::MAIN_WINDOW,
+                tauri::WebviewUrl::External(app_url().parse().map_err(|error| {
+                    format!("Fensteradresse nicht lesbar: {error}")
+                })?),
+            )
+            .title("Fero")
+            .inner_size(1440.0, 900.0)
+            .resizable(true)
+            .center()
+            .build()?;
+
             // The tray is what remains when the window is closed; without it a
             // closed window would mean no more scheduled checks.
             if let Err(error) = tray::install(app.handle()) {
