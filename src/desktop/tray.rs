@@ -125,7 +125,9 @@ fn start_timer() {
                 LAST_SCHEDULED_RUN.store(unix_now(), Ordering::SeqCst);
                 match start_scheduled_checks() {
                     0 => debug_log("Zeitplan: fällig, aber es läuft bereits eine Prüfung."),
-                    started => debug_log(&format!("Zeitplan: {started} Prüflauf/-läufe gestartet.")),
+                    started => {
+                        debug_log(&format!("Zeitplan: {started} Prüflauf/-läufe gestartet."))
+                    }
                 }
             }
             std::thread::sleep(TICK);
