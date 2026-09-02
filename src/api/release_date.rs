@@ -132,9 +132,13 @@ fn parse_month_name(lower: &str) -> Option<u64> {
     // The two numbers around the month name are the day and the year; which is
     // which follows from the size, not from the order the site chose.
     let mut numbers: Vec<i64> = Vec::new();
-    for offset in [position.checked_sub(1), Some(position + 1), Some(position + 2)]
-        .into_iter()
-        .flatten()
+    for offset in [
+        position.checked_sub(1),
+        Some(position + 1),
+        Some(position + 2),
+    ]
+    .into_iter()
+    .flatten()
     {
         if let Some(number) = words.get(offset).and_then(|word| word.parse::<i64>().ok()) {
             numbers.push(number);
@@ -202,10 +206,7 @@ mod tests {
     #[test]
     fn the_same_day_written_three_ways_gives_the_same_answer() {
         assert_eq!(parse_release("2026-08-10", NOW), Some(TENTH_OF_AUGUST));
-        assert_eq!(
-            parse_release("August 10, 2026", NOW),
-            Some(TENTH_OF_AUGUST)
-        );
+        assert_eq!(parse_release("August 10, 2026", NOW), Some(TENTH_OF_AUGUST));
         assert_eq!(parse_release("10 Aug 2026", NOW), Some(TENTH_OF_AUGUST));
         // Sites append a time; the day is all this promises.
         assert_eq!(

@@ -98,11 +98,9 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
     let mut latest_release_unix: Option<u64> = None;
     let mut seen = std::collections::HashSet::new();
     for row in html.select(&row_selector) {
-        if let Some(released) = row
-            .select(&cell_selector)
-            .next()
-            .and_then(|cell| release_date::parse_month_first_short(&cell.text().collect::<String>()))
-        {
+        if let Some(released) = row.select(&cell_selector).next().and_then(|cell| {
+            release_date::parse_month_first_short(&cell.text().collect::<String>())
+        }) {
             latest_release_unix = Some(latest_release_unix.unwrap_or(released).max(released));
         }
         for link in row.select(&link_selector) {

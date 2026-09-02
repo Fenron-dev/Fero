@@ -564,7 +564,10 @@ fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo) {
     // Nur vorwaerts: verschwindet ein Datum aus der Seite oder liest ein Lauf
     // eine gekuerzte Liste, bleibt der zuletzt bekannte Stand stehen.
     if let Some(released) = info.latest_release_unix {
-        if subscription.latest_release_unix.is_none_or(|known| released > known) {
+        if subscription
+            .latest_release_unix
+            .is_none_or(|known| released > known)
+        {
             subscription.latest_release_unix = Some(released);
         }
     }
