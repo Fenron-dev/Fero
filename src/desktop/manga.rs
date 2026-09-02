@@ -948,11 +948,24 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
         delay_ms: req.delay_ms,
         max_chapters: req.max_chapters,
     };
-    let thread_job_id = job_id.clone();
+    spawn_check(ws, options, job_id.clone());
+
+    MangaCheckResponse {
+        job_id: Some(job_id),
+        error: None,
+    }
+}
+
+/// Runs a check on a worker thread and writes its outcome into the job.
+///
+/// Shared by the endpoint and the scheduled run so the two cannot drift apart
+/// — the whole reason manga were never fetched automatically is that only one
+/// of the two paths existed.
+fn spawn_check(ws: Workspace, options: CheckOptions, job_id: String) {
     std::thread::spawn(move || {
         let _active = CheckActiveGuard;
-        let outcome = run_check(&ws, &options, &thread_job_id);
-        update_job(&thread_job_id, |status| match &outcome {
+        let outcome = run_check(&ws, &options, &job_id);
+        update_job(&job_id, |status| match &outcome {
             Ok(message) => {
                 status.state = "done".to_string();
                 status.message = Some(message.clone());
@@ -963,11 +976,49 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
             }
         });
     });
+}
 
-    MangaCheckResponse {
-        job_id: Some(job_id),
-        error: None,
+/// Starts a scheduled check of every due subscription.
+///
+/// The manga counterpart to `webnovel::start_scheduled_check`.
+/// Its absence was a silent hole: the tray and the timer only ever started the
+/// novel engine, so a manga subscription was never fetched unless someone
+/// opened the window and clicked — in a program whose point is running when
+/// nobody is looking.
+///
+/// Returns `false` when a run is already in flight; the timer then skips this
+/// tick rather than queueing, because runs longer than the interval would
+/// otherwise pile up behind each other.
+pub(super) fn start_scheduled_check() -> bool {
+    let Ok(ws) = resolve_workspace(None) else {
+        return false;
+    };
+    if MANGA_CHECK_ACTIVE
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return false;
     }
+
+    let job_id = format!(
+        "manga-{}-{}",
+        unix_now(),
+        MANGA_JOB_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    if let Ok(mut jobs) = MANGA_JOBS.lock() {
+        prune_jobs(&mut jobs);
+        jobs.insert(job_id.clone(), MangaJobStatus::running());
+    }
+    spawn_check(
+        ws,
+        CheckOptions {
+            only_id: None,
+            delay_ms: None,
+            max_chapters: None,
+        },
+        job_id,
+    );
+    true
 }
 
 /// Asks a running check to stop.

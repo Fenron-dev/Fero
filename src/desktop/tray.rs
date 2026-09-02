@@ -72,7 +72,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         "open" => show_main_window(app),
         "check" => {
-            if !webnovel::start_scheduled_check() {
+            if start_scheduled_checks() == 0 {
                 debug_log("Tray: Prüfung angefordert, es läuft bereits eine.");
             }
         }
@@ -123,13 +123,31 @@ fn start_timer() {
         loop {
             if is_due() && !SCHEDULE_PAUSED.load(Ordering::SeqCst) {
                 LAST_SCHEDULED_RUN.store(unix_now(), Ordering::SeqCst);
-                if webnovel::start_scheduled_check() {
-                    debug_log("Zeitplan: Prüflauf gestartet.");
+                match start_scheduled_checks() {
+                    0 => debug_log("Zeitplan: fällig, aber es läuft bereits eine Prüfung."),
+                    started => debug_log(&format!("Zeitplan: {started} Prüflauf/-läufe gestartet.")),
                 }
             }
             std::thread::sleep(TICK);
         }
     });
+}
+
+/// Starts the scheduled run of both engines; returns how many actually began.
+///
+/// Both, not one. Until 2026-09-02 only the novel engine was started here, so a
+/// manga subscription was never fetched unless someone opened the window and
+/// clicked — in the one part of the program whose entire purpose is running
+/// when nobody is looking.
+///
+/// The two run side by side rather than one after the other: they touch
+/// different hosts and different folders, and their "already running" flags are
+/// separate for exactly that reason. A slow novel run must not mean manga are
+/// skipped for the rest of the day.
+fn start_scheduled_checks() -> usize {
+    let novels = webnovel::start_scheduled_check();
+    let comics = manga::start_scheduled_check();
+    usize::from(novels) + usize::from(comics)
 }
 
 /// Whether the configured interval has elapsed.
