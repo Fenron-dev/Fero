@@ -25,6 +25,7 @@ pub mod novelupdates;
 pub mod royalroad;
 pub mod status;
 pub mod wordpress;
+pub mod wtrlab;
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -117,6 +118,10 @@ pub fn detect_source(url: &str) -> Box<dyn NovelSource> {
         Box::new(novelphoenix::NovelPhoenixSource)
     } else if host.ends_with("novelupdates.com") {
         Box::new(novelupdates::NovelUpdatesSource)
+    } else if host.ends_with("wtr-lab.com") {
+        // Next.js-Anwendung: Metadaten im __NEXT_DATA__, Kapitelliste und
+        // Kapiteltext je hinter einem eigenen API-Aufruf.
+        Box::new(wtrlab::WtrLabSource)
     } else if host.ends_with("novelarrow.com") {
         // JS-rendered SPA — fetched through the browser window; dedicated
         // adapter reads the full chapter list from the "chapters" tab.
@@ -418,13 +423,67 @@ impl PoliteClient {
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
+        Self::send_for_text(request, url)
+    }
+
+    /// Posts a JSON body and returns the response text.
+    ///
+    /// The one place Fero sends rather than asks. It exists because not every
+    /// source hands its chapter text out over a plain URL — WTR-Lab answers
+    /// only a `POST` naming the novel and the chapter number. The per-host
+    /// delay, the retries and the Cloudflare handling are the same as for a
+    /// `GET`: from the far end this is one more request against one more host.
+    ///
+    /// Not routed through the browser window, unlike [`Self::get_text`]: the
+    /// renderer can only be asked to open a URL, and there is no way to make it
+    /// send a body.
+    ///
+    /// # Errors
+    /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
+    pub fn post_json(&self, url: &str, body: String, headers: &[(&str, &str)]) -> Result<String> {
+        let mut attempt = 0;
+        loop {
+            self.respect_delay(url);
+            let mut request = self
+                .client
+                .post(url)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .body(body.clone());
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            match Self::send_for_text(request, url) {
+                Ok((_, text)) => return Ok(text),
+                Err(RequestFailure::Fatal(error)) => return Err(error),
+                Err(RequestFailure::Transient(error)) => {
+                    if attempt as usize >= RETRY_BACKOFF_SECS.len() || attempt >= MAX_RETRIES {
+                        return Err(error);
+                    }
+                    std::thread::sleep(Duration::from_secs(RETRY_BACKOFF_SECS[attempt as usize]));
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    /// Sends a prepared request and reads the body as text.
+    ///
+    /// Shared by `GET` and `POST`: a Cloudflare challenge, a 429 and a 5xx mean
+    /// the same thing whichever verb produced them, and a second copy of that
+    /// judgement would be a second thing to keep correct.
+    fn send_for_text(
+        request: reqwest::blocking::RequestBuilder,
+        url: &str,
+    ) -> std::result::Result<(String, String), RequestFailure> {
         // A manually solved Cloudflare challenge leaves cookies + UA here;
         // sending them lets subsequent plain requests pass the check.
-        if let Some(session) = browser_session_for(url) {
-            request = request
+        let request = match browser_session_for(url) {
+            Some(session) => request
                 .header("Cookie", session.cookie_header)
-                .header("User-Agent", session.user_agent);
-        }
+                .header("User-Agent", session.user_agent),
+            None => request,
+        };
         let response = request.send().map_err(|e| {
             if e.is_timeout() || e.is_connect() {
                 RequestFailure::Transient(FeroError::ExternalApi(format!(
@@ -833,6 +892,10 @@ mod tests {
         assert_eq!(
             detect_source("https://www.royalroad.com/fiction/1").id(),
             "royalroad"
+        );
+        assert_eq!(
+            detect_source("https://wtr-lab.com/en/novel/95971/ein-titel").id(),
+            "wtrlab"
         );
         assert_eq!(
             detect_source("https://www.divinedaolibrary.com/novel-x/").id(),
