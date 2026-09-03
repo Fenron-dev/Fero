@@ -148,7 +148,9 @@ fn parse_chapter_list(
     let entries = parsed
         .get("chapters")
         .and_then(Value::as_array)
-        .ok_or_else(|| FeroError::ExternalApi("WTR-Lab: Kapitelliste ohne Eintraege.".to_string()))?;
+        .ok_or_else(|| {
+            FeroError::ExternalApi("WTR-Lab: Kapitelliste ohne Eintraege.".to_string())
+        })?;
 
     let now = crate::core::subscription::unix_now();
     let mut latest: Option<u64> = None;
@@ -383,8 +385,14 @@ mod tests {
         assert_eq!(slug, "ein-titel");
 
         let data = next_data(SERIES_PAGE).expect("script should parse");
-        let internal = data.pointer("/props/pageProps/serie/serie_data/id").unwrap();
-        assert_ne!(internal.as_u64(), Some(raw_id), "die beiden Ids sind nicht dieselbe");
+        let internal = data
+            .pointer("/props/pageProps/serie/serie_data/id")
+            .unwrap();
+        assert_ne!(
+            internal.as_u64(),
+            Some(raw_id),
+            "die beiden Ids sind nicht dieselbe"
+        );
     }
 
     #[test]
