@@ -1481,7 +1481,8 @@ mod tests {
             // ist das eigene Schema die richtige Antwort.
             tauri::WebviewUrl::External(url) => {
                 assert_eq!(url.scheme(), "http", "External nur fuer http/https");
-                assert!(cfg!(windows), "External gehoert nur auf Windows hierher");
+                #[cfg(not(windows))]
+                panic!("External gehoert nur auf Windows hierher");
             }
             tauri::WebviewUrl::CustomProtocol(url) => {
                 assert_eq!(url.scheme(), PROTOCOL_SCHEME);
