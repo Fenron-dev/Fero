@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Zweckangaben fuer die Rechteabfragen von macOS.
+
+    Ohne sie zeigt macOS eine Abfrage ohne Begruendung — und ausgerechnet bei
+    Netzvolumen ist eine fehlende Zweckangabe eine bekannte Ursache dafuer,
+    dass die erteilte Zustimmung nicht haften bleibt.
+
+    Fero schreibt fertige Dateien in einen Ordner, den der Nutzer waehlt. Dass
+    dieser Ordner auf einer Netzfreigabe oder einer externen Platte liegt, ist
+    der Normalfall und nicht die Ausnahme: eine Sammlung waechst schnell ueber
+    das hinaus, was auf einem Rechner Platz hat.
+  -->
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>Fero legt fertige Kapitel in dem Zielordner ab, den du gewählt hast. Liegt er auf einer Netzfreigabe, braucht Fero dafür deine Zustimmung.</string>
+
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Fero legt fertige Kapitel in dem Zielordner ab, den du gewählt hast. Liegt er auf einer externen Platte, braucht Fero dafür deine Zustimmung.</string>
+
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Fero legt fertige Kapitel in dem Zielordner ab, den du gewählt hast. Liegt er im Ordner „Downloads“, braucht Fero dafür deine Zustimmung.</string>
+
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Fero legt fertige Kapitel in dem Zielordner ab, den du gewählt hast. Liegt er im Ordner „Dokumente“, braucht Fero dafür deine Zustimmung.</string>
+
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Fero legt fertige Kapitel in dem Zielordner ab, den du gewählt hast. Liegt er auf dem Schreibtisch, braucht Fero dafür deine Zustimmung.</string>
+</dict>
+</plist>

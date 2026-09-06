@@ -6,8 +6,10 @@
 //! suggestion plus a reason and has to let the user decide. Downloading into a
 //! surprise directory is worse than not downloading at all.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -347,16 +349,50 @@ pub enum TargetResolution {
     },
 }
 
+/// How long a reachability answer is reused before the disk is asked again.
+///
+/// Short enough that a share going offline is noticed within seconds, long
+/// enough to collapse one screenful of subscriptions into a single question.
+const REACHABILITY_TTL: Duration = Duration::from_secs(5);
+
+/// Remembered answers, keyed by the directory that was asked about.
+static REACHABILITY: LazyLock<Mutex<HashMap<PathBuf, (Instant, bool)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Returns true when a directory can plausibly be written to right now.
 ///
 /// A configured target may sit on a network share that is currently offline.
 /// The parent has to exist; the leaf may still be missing and gets created at
 /// delivery time.
+///
+/// The answer is remembered for [`REACHABILITY_TTL`]. Listing the
+/// subscriptions asks this once per work, and they nearly all point at the same
+/// directory: with a target on a network share that meant dozens of stats
+/// against the same mount every time the list was drawn, which keeps a share
+/// awake for nothing and — where the mount had dropped — makes the system ask
+/// about it again. One question per five seconds says the same thing.
 fn is_reachable(dir: &Path) -> bool {
-    if dir.is_dir() {
-        return true;
+    reachable_at(dir, Instant::now())
+}
+
+/// The cached lookup behind [`is_reachable`]; `now` is passed in for tests.
+fn reachable_at(dir: &Path, now: Instant) -> bool {
+    if let Ok(cache) = REACHABILITY.lock() {
+        if let Some((asked, answer)) = cache.get(dir) {
+            if now.duration_since(*asked) < REACHABILITY_TTL {
+                return *answer;
+            }
+        }
     }
-    dir.parent().map(Path::is_dir).unwrap_or(false)
+
+    let answer = dir.is_dir() || dir.parent().map(Path::is_dir).unwrap_or(false);
+    if let Ok(mut cache) = REACHABILITY.lock() {
+        // Der Zwischenspeicher darf nicht unbegrenzt wachsen: abgelaufene
+        // Eintraege fliegen raus, sobald ohnehin geschrieben wird.
+        cache.retain(|_, (asked, _)| now.duration_since(*asked) < REACHABILITY_TTL);
+        cache.insert(dir.to_path_buf(), (now, answer));
+    }
+    answer
 }
 
 /// Resolves the delivery target for one work.
@@ -433,6 +469,25 @@ pub fn resolve_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Der Prüf-Sturm, den dieser Zwischenspeicher abstellt: eine Abo-Liste
+    /// fragt einmal je Werk, und fast alle zeigen auf denselben Ordner.
+    #[test]
+    fn reachability_is_remembered_briefly_and_then_asked_again() {
+        let dir = std::env::temp_dir().join(format!("fero-reach-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("Testordner muss anlegbar sein");
+        let now = Instant::now();
+
+        assert!(reachable_at(&dir, now), "vorhandener Ordner ist erreichbar");
+
+        // Verschwindet der Ordner, bleibt die Antwort innerhalb der Frist
+        // stehen — genau das spart die wiederholten Zugriffe.
+        std::fs::remove_dir_all(&dir).expect("Testordner muss entfernbar sein");
+        assert!(reachable_at(&dir, now), "innerhalb der Frist gilt die gemerkte Antwort");
+
+        // Nach Ablauf wird wieder nachgesehen, und dann stimmt sie nicht mehr.
+        assert!(!reachable_at(&dir, now + REACHABILITY_TTL));
+    }
 
     fn settings(defaults: &[(MediaKind, &str)], fallback: Option<&str>) -> TargetSettings {
         let mut settings = TargetSettings::default();
