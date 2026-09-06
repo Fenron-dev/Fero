@@ -124,6 +124,27 @@ const INDEX_HTML: &str = include_str!("../../dist/index.html");
 const APP_JS: &str = include_str!("../../dist/app.js");
 const STYLES_CSS: &str = include_str!("../../dist/styles.css");
 
+/// What the main window is told to load.
+///
+/// The variant matters as much as the address. `WebviewUrl::External` is
+/// documented as "must use either the `http` or `https` schemes", and handing
+/// it `fero://localhost` — as this did briefly — makes the webview treat the
+/// app's own pages as remote web content. On macOS that showed up as repeated
+/// permission prompts for network and folder access on every launch.
+///
+/// The rule below is the one Tauri's own config deserializer applies to the
+/// same string, so a window built here behaves exactly like one declared in
+/// `tauri.conf.json` did before.
+fn window_target() -> std::result::Result<tauri::WebviewUrl, String> {
+    let url: tauri::Url = app_url()
+        .parse()
+        .map_err(|error| format!("Fensteradresse nicht lesbar: {error}"))?;
+    Ok(match url.scheme() {
+        "http" | "https" => tauri::WebviewUrl::External(url),
+        _ => tauri::WebviewUrl::CustomProtocol(url),
+    })
+}
+
 /// The address the main window loads.
 ///
 /// Windows serves a custom URI scheme as `http://<scheme>.localhost`, every
@@ -173,15 +194,7 @@ pub(crate) fn run() -> Result<()> {
             // Das Fenster entsteht hier statt in tauri.conf.json, weil seine
             // Adresse von der Plattform abhaengt — siehe `app_url`. Eine
             // JSON-Datei kann diese Verzweigung nicht ausdruecken.
-            tauri::WebviewWindowBuilder::new(
-                app,
-                tray::MAIN_WINDOW,
-                tauri::WebviewUrl::External(
-                    app_url()
-                        .parse()
-                        .map_err(|error| format!("Fensteradresse nicht lesbar: {error}"))?,
-                ),
-            )
+            tauri::WebviewWindowBuilder::new(app, tray::MAIN_WINDOW, window_target()?)
             .title("Fero")
             .inner_size(1440.0, 900.0)
             .resizable(true)
@@ -1455,6 +1468,27 @@ fn build_reveal_response(body: &[u8]) -> OpenExternalResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Die Regression, die dieser Test festhaelt: das Fenster wurde kurzzeitig
+    /// als `External` geoeffnet. Das ist laut Tauri auf http/https beschraenkt,
+    /// und mit `fero://` behandelt die Webview die eigenen Seiten wie fremde
+    /// Web-Inhalte — auf macOS mit wiederkehrenden Rechtefragen als Folge.
+    #[test]
+    fn the_window_opens_as_a_custom_protocol_not_as_a_remote_page() {
+        let target = window_target().expect("Fensteradresse muss lesbar sein");
+        match target {
+            // Windows liefert die Seite selbst ueber http aus; ueberall sonst
+            // ist das eigene Schema die richtige Antwort.
+            tauri::WebviewUrl::External(url) => {
+                assert_eq!(url.scheme(), "http", "External nur fuer http/https");
+                assert!(cfg!(windows), "External gehoert nur auf Windows hierher");
+            }
+            tauri::WebviewUrl::CustomProtocol(url) => {
+                assert_eq!(url.scheme(), PROTOCOL_SCHEME);
+            }
+            other => panic!("unerwartete Fensteradresse: {other:?}"),
+        }
+    }
 
     #[test]
     fn sanitize_strips_path_operators() {

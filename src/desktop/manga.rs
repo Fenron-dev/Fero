@@ -1349,6 +1349,11 @@ fn check_one(
                 save_subscription(&ws.store, subscription)?;
             }
             Err(error) => {
+                // Ein Abbruch ist kein Fehlschlag: es wurde nichts geschrieben,
+                // und der naechste Lauf holt das Kapitel unveraendert nach.
+                if cancel_requested(job_id) {
+                    break;
+                }
                 consecutive_failures += 1;
                 debug_log(&format!(
                     "manga chapter {}/{}: FEHLER '{}' — {error}",
@@ -1384,7 +1389,11 @@ fn check_one(
     }
     // Erst hier, nicht vor dem Herunterladen: „abgeschlossen" verlangt, dass
     // nichts mehr aussteht, und das entscheidet sich in der Schleife darueber.
-    refresh_series_status(client, subscription, info.completed_hint);
+    // Nach einem Abbruch entfaellt sie: wer stoppt, will keine weitere
+    // Netzanfrage abwarten, und der Rueckstand stimmt gerade ohnehin nicht.
+    if !cancel_requested(job_id) {
+        refresh_series_status(client, subscription, info.completed_hint);
+    }
     refresh_manifest(&series_dir, subscription);
 
     if let Some(error) = fetch_error {
@@ -1498,6 +1507,18 @@ fn download_chapter(
 
     let mut images = Vec::with_capacity(pages.len());
     for (position, page) in pages.iter().enumerate() {
+        // Hier, nicht erst zwischen zwei Kapiteln. Die urspruengliche
+        // Begruendung — eine halbe CBZ waere schlimmer — war schlicht falsch:
+        // geschrieben wird erst unten, wenn alle Seiten beisammen sind. Ein
+        // Abbruch hier laesst nur Speicher fallen und hinterlaesst keine Datei.
+        // Zwischen zwei Kapiteln zu warten hiess dagegen, dutzende Bildabrufe
+        // mit Mindestabstand abzusitzen — gefuehlt reagierte der Knopf nicht.
+        if cancel_requested(job_id) {
+            return Err(FeroError::ExternalApi(format!(
+                "Abbruch auf Wunsch: {}",
+                chapter.url
+            )));
+        }
         update_job(job_id, |status| status.current_page = position + 1);
 
         let bytes = client.get_image(&page.url, page.referer.as_deref())?;
