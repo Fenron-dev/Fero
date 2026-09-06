@@ -474,16 +474,22 @@ mod tests {
     /// fragt einmal je Werk, und fast alle zeigen auf denselben Ordner.
     #[test]
     fn reachability_is_remembered_briefly_and_then_asked_again() {
-        let dir = std::env::temp_dir().join(format!("fero-reach-{}", std::process::id()));
+        // Zwei Ebenen tief: erreichbar heisst „der Elternordner existiert",
+        // also muss fuer ein ehrliches „weg" auch der mitverschwinden.
+        let root = std::env::temp_dir().join(format!("fero-reach-{}", std::process::id()));
+        let dir = root.join("ziel");
         std::fs::create_dir_all(&dir).expect("Testordner muss anlegbar sein");
         let now = Instant::now();
 
         assert!(reachable_at(&dir, now), "vorhandener Ordner ist erreichbar");
 
-        // Verschwindet der Ordner, bleibt die Antwort innerhalb der Frist
+        // Faellt die Freigabe weg, bleibt die Antwort innerhalb der Frist
         // stehen — genau das spart die wiederholten Zugriffe.
-        std::fs::remove_dir_all(&dir).expect("Testordner muss entfernbar sein");
-        assert!(reachable_at(&dir, now), "innerhalb der Frist gilt die gemerkte Antwort");
+        std::fs::remove_dir_all(&root).expect("Testordner muss entfernbar sein");
+        assert!(
+            reachable_at(&dir, now),
+            "innerhalb der Frist gilt die gemerkte Antwort"
+        );
 
         // Nach Ablauf wird wieder nachgesehen, und dann stimmt sie nicht mehr.
         assert!(!reachable_at(&dir, now + REACHABILITY_TTL));
