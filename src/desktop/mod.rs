@@ -195,11 +195,11 @@ pub(crate) fn run() -> Result<()> {
             // Adresse von der Plattform abhaengt — siehe `app_url`. Eine
             // JSON-Datei kann diese Verzweigung nicht ausdruecken.
             tauri::WebviewWindowBuilder::new(app, tray::MAIN_WINDOW, window_target()?)
-            .title("Fero")
-            .inner_size(1440.0, 900.0)
-            .resizable(true)
-            .center()
-            .build()?;
+                .title("Fero")
+                .inner_size(1440.0, 900.0)
+                .resizable(true)
+                .center()
+                .build()?;
 
             // The tray is what remains when the window is closed; without it a
             // closed window would mean no more scheduled checks.
