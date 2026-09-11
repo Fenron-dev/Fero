@@ -163,7 +163,7 @@ fn host_matches(host: &str, expected: &str) -> bool {
 /// Identifies the app to site operators; deliberately descriptive.
 const USER_AGENT: &str = "Fero/0.1 (personal library tool)";
 /// Default minimum spacing between two requests to the same host.
-const MIN_REQUEST_DELAY_MS: u64 = 1_500;
+pub const DEFAULT_REQUEST_DELAY_MS: u64 = 1_500;
 /// Minimum spacing between two image requests to the same host.
 ///
 /// Page images live on CDNs that browsers hit with a dozen parallel requests
@@ -172,9 +172,9 @@ const MIN_REQUEST_DELAY_MS: u64 = 1_500;
 /// just at a cadence the CDN already expects.
 const IMAGE_REQUEST_DELAY_MS: u64 = 250;
 /// Lower bound for the configurable delay — anything faster risks IP bans.
-const MIN_ALLOWED_DELAY_MS: u64 = 500;
+pub const MIN_ALLOWED_DELAY_MS: u64 = 500;
 /// Upper bound for the configurable delay.
-const MAX_ALLOWED_DELAY_MS: u64 = 5_000;
+pub const MAX_ALLOWED_DELAY_MS: u64 = 5_000;
 /// Per-request timeout.
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 /// Largest decompressed HTML/API response kept in memory.
@@ -234,6 +234,13 @@ pub type RenderedFetcher = Arc<dyn Fn(&str) -> Result<String> + Send + Sync>;
 static BROWSER_SESSIONS: LazyLock<Mutex<HashMap<String, BrowserSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Shared request timestamps across all clients and both download engines.
+///
+/// Clients can have different configured delays per subscription, but they
+/// must still respect one another when they address the same host.
+static LAST_REQUESTS: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Registers a solved-challenge session for a host.
 pub fn set_browser_session(host: &str, session: BrowserSession) {
     if let Ok(mut sessions) = BROWSER_SESSIONS.lock() {
@@ -264,8 +271,6 @@ pub struct PoliteClient {
     min_delay: Duration,
     /// Minimum spacing between two image requests to the same host.
     image_delay: Duration,
-    /// Last request instant per host, for enforcing `min_delay`.
-    last_request: Mutex<HashMap<String, Instant>>,
     /// When set, whitelisted hosts are fetched through the browser window
     /// instead of plain HTTP (rendered HTML / TLS-bound Cloudflare sessions).
     renderer: Option<RenderedFetcher>,
@@ -277,7 +282,7 @@ impl PoliteClient {
     /// # Errors
     /// - `FeroError::ExternalApi` if the TLS backend fails to initialize
     pub fn new() -> Result<Self> {
-        Self::with_delay_ms(MIN_REQUEST_DELAY_MS)
+        Self::with_delay_ms(DEFAULT_REQUEST_DELAY_MS)
     }
 
     /// Builds the client with a custom per-host delay.
@@ -288,6 +293,7 @@ impl PoliteClient {
     /// # Errors
     /// - `FeroError::ExternalApi` if the TLS backend fails to initialize
     pub fn with_delay_ms(delay_ms: u64) -> Result<Self> {
+        let delay_ms = clamp_request_delay_ms(delay_ms);
         let client = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -307,13 +313,10 @@ impl PoliteClient {
             .map_err(|e| FeroError::ExternalApi(format!("HTTP client init failed: {e}")))?;
         Ok(Self {
             client,
-            min_delay: Duration::from_millis(
-                delay_ms.clamp(MIN_ALLOWED_DELAY_MS, MAX_ALLOWED_DELAY_MS),
-            ),
+            min_delay: Duration::from_millis(delay_ms),
             // A user who slows the client down expects that to apply to images
             // too, so the image delay never exceeds the page delay.
             image_delay: Duration::from_millis(IMAGE_REQUEST_DELAY_MS.min(delay_ms)),
-            last_request: Mutex::new(HashMap::new()),
             renderer: None,
         })
     }
@@ -608,7 +611,7 @@ impl PoliteClient {
             return;
         };
         let wait = {
-            let Ok(mut map) = self.last_request.lock() else {
+            let Ok(mut map) = LAST_REQUESTS.lock() else {
                 return; // Poisoned lock: skip the delay rather than aborting.
             };
             let now = Instant::now();
@@ -623,6 +626,12 @@ impl PoliteClient {
             std::thread::sleep(wait);
         }
     }
+}
+
+/// Keeps user-configured request pacing inside the safe range shared by both
+/// download engines.
+pub fn clamp_request_delay_ms(delay_ms: u64) -> u64 {
+    delay_ms.clamp(MIN_ALLOWED_DELAY_MS, MAX_ALLOWED_DELAY_MS)
 }
 
 /// Reads at most one byte beyond `limit`, enough to distinguish an exact-size

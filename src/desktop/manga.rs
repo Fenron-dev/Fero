@@ -265,6 +265,9 @@ pub(crate) struct MangaSubscriptionSummary {
     /// Total chapter cap, when one is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     download_limit: Option<u32>,
+    /// Per-subscription request spacing; `None` means the global setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_delay_ms: Option<u64>,
     /// Where the files currently live, when anything was delivered.
     #[serde(skip_serializing_if = "Option::is_none")]
     delivered_to: Option<String>,
@@ -336,6 +339,7 @@ impl MangaSubscriptionSummary {
             target_dir: subscription.target_dir.clone(),
             media_kind: kind,
             download_limit: subscription.download_limit,
+            download_delay_ms: subscription.download_delay_ms,
             delivered_to: subscription.delivered_to.clone(),
             needs_relocation,
             has_cover,
@@ -787,6 +791,10 @@ struct UpdateRequest {
     /// New total chapter cap; zero lifts the limit.
     #[serde(default)]
     download_limit: Option<u32>,
+    /// New per-subscription request spacing in milliseconds; zero uses the
+    /// global setting.
+    #[serde(default)]
+    download_delay_ms: Option<u64>,
     /// New category (`manga` or `hmanga`).
     #[serde(default)]
     media_kind: Option<String>,
@@ -849,6 +857,10 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
     }
     if let Some(limit) = req.download_limit {
         subscription.download_limit = (limit > 0).then_some(limit);
+    }
+    if let Some(delay_ms) = req.download_delay_ms {
+        subscription.download_delay_ms = (delay_ms > 0)
+            .then(|| crate::api::novel::clamp_request_delay_ms(delay_ms));
     }
     if let Some(kind) = req.media_kind.as_deref().and_then(MediaKind::from_id) {
         if kind.uses_manga_engine() {
@@ -1129,10 +1141,9 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
         return Ok("Keine passenden Abonnements.".to_string());
     }
 
-    let client = match options.delay_ms {
-        Some(delay_ms) => PoliteClient::with_delay_ms(delay_ms)?,
-        None => PoliteClient::new()?,
-    };
+    let global_delay_ms = options
+        .delay_ms
+        .unwrap_or_else(|| load_schedule_settings(system_dir).download_delay_ms);
 
     let mut new_chapters = 0usize;
     let mut failures = 0usize;
@@ -1150,6 +1161,11 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
             status.current_page = 0;
             status.total_pages = 0;
         });
+
+        let delay_ms = subscription
+            .download_delay_ms
+            .unwrap_or(global_delay_ms);
+        let client = PoliteClient::with_delay_ms(delay_ms)?;
 
         match check_one(ws, &client, &mut subscription, options, job_id) {
             Ok(downloaded) => {
@@ -1609,10 +1625,21 @@ fn ensure_cover(client: &PoliteClient, subscription: &Subscription, series_dir: 
     if manga_cover_path(series_dir).is_some() {
         return false;
     }
-    let Ok(bytes) = client.get_image(cover_url, Some(&subscription.url)) else {
-        return false;
+    let bytes = match client.get_image(cover_url, Some(&subscription.url)) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            debug_log(&format!(
+                "manga cover: '{}' konnte nicht geladen werden ({}): {error}",
+                subscription.title, cover_url
+            ));
+            return false;
+        }
     };
     let Some(media_type) = detect_image_media_type(&bytes) else {
+        debug_log(&format!(
+            "manga cover: '{}' lieferte kein unterstütztes Bild ({})",
+            subscription.title, cover_url
+        ));
         return false;
     };
     let file_name = match media_type {
@@ -1621,7 +1648,18 @@ fn ensure_cover(client: &PoliteClient, subscription: &Subscription, series_dir: 
         "image/gif" => "cover.gif",
         _ => "cover.jpg",
     };
-    fs::write(series_dir.join(file_name), bytes).is_ok()
+    let target = series_dir.join(file_name);
+    match crate::deliver::targets::serialized_path_access(|| fs::write(&target, bytes)) {
+        Ok(()) => true,
+        Err(error) => {
+            debug_log(&format!(
+                "manga cover: '{}' konnte nicht gespeichert werden ({}): {error}",
+                subscription.title,
+                target.display()
+            ));
+            false
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

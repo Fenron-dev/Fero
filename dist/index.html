@@ -235,8 +235,13 @@
               <span>Kapitel-Limit (0 = alle)</span>
               <input type="number" id="detail-limit" class="input" min="0" placeholder="alle" />
             </label>
+            <label class="field" style="margin: 0">
+              <span>Anfrageabstand in ms</span>
+              <input type="number" id="detail-delay" class="input" min="500" max="5000" step="100" placeholder="Standard" />
+            </label>
             <button class="action" id="detail-kind-save">Speichern</button>
           </div>
+          <p class="hint">Leer bzw. 0 verwendet den globalen Wert. Ein kleinerer Abstand lädt schneller; 500 ms ist die sichere Untergrenze.</p>
           <p class="feedback" id="detail-kind-feedback"></p>
         </div>
 
@@ -315,6 +320,24 @@
           <button class="action" id="data-dir-pick">Datenordner wählen</button>
         </div>
         <p class="feedback" id="data-dir-feedback"></p>
+      </div>
+
+      <div class="panel">
+        <p class="panel-label">Downloadgeschwindigkeit</p>
+        <p class="hint">
+          Der Abstand zwischen Anfragen gilt für Webnovels und Manga sowie für
+          automatische Prüfläufe. Ein kleinerer Wert lädt schneller, kann aber
+          eher zu einer Sperre durch die Quelle führen. Einzelne Abos können
+          diesen Standard überschreiben.
+        </p>
+        <div class="row">
+          <label class="field" style="margin: 0">
+            <span>Anfrageabstand in ms</span>
+            <input type="number" id="download-delay" class="input" min="500" max="5000" step="100" />
+          </label>
+          <button class="action" id="download-delay-save">Speichern</button>
+        </div>
+        <p class="feedback" id="download-delay-feedback"></p>
       </div>
 
       <div class="panel">

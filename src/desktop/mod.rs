@@ -705,6 +705,7 @@ impl Workspace {
 #[serde(rename_all = "camelCase")]
 struct ScheduleResponse {
     interval_hours: u64,
+    download_delay_ms: u64,
     quit_on_close: bool,
     paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -718,6 +719,7 @@ fn build_schedule_response() -> ScheduleResponse {
         .unwrap_or_default();
     ScheduleResponse {
         interval_hours: settings.interval_hours,
+        download_delay_ms: settings.download_delay_ms,
         quit_on_close: settings.quit_on_close,
         paused: tray::is_paused(),
         error: None,
@@ -733,6 +735,8 @@ struct SaveScheduleRequest {
     quit_on_close: Option<bool>,
     #[serde(default)]
     paused: Option<bool>,
+    #[serde(default)]
+    download_delay_ms: Option<u64>,
 }
 
 fn build_save_schedule_response(body: &[u8]) -> ScheduleResponse {
@@ -764,6 +768,9 @@ fn build_save_schedule_response(body: &[u8]) -> ScheduleResponse {
     if let Some(paused) = req.paused {
         tray::set_paused(paused);
     }
+    if let Some(delay_ms) = req.download_delay_ms {
+        settings.download_delay_ms = crate::api::novel::clamp_request_delay_ms(delay_ms);
+    }
 
     if let Err(error) = save_schedule_settings(&ws.store, &settings) {
         return ScheduleResponse {
@@ -783,6 +790,9 @@ const SCHEDULE_SETTINGS_FILE: &str = "schedule.json";
 pub(crate) struct ScheduleSettings {
     /// Hours between automatic checks.
     pub(crate) interval_hours: u64,
+    /// Minimum spacing between requests for both download engines.
+    #[serde(default = "default_download_delay_ms")]
+    pub(crate) download_delay_ms: u64,
     /// Whether closing the window quits instead of hiding to the tray.
     #[serde(default)]
     pub(crate) quit_on_close: bool,
@@ -792,6 +802,7 @@ impl Default for ScheduleSettings {
     fn default() -> Self {
         Self {
             interval_hours: 6,
+            download_delay_ms: crate::api::novel::DEFAULT_REQUEST_DELAY_MS,
             quit_on_close: false,
         }
     }
@@ -799,10 +810,18 @@ impl Default for ScheduleSettings {
 
 /// Loads the schedule settings; anything unreadable means "use the defaults".
 pub(crate) fn load_schedule_settings(store: &Path) -> ScheduleSettings {
-    fs::read_to_string(store.join(SCHEDULE_SETTINGS_FILE))
+    let mut settings = fs::read_to_string(store.join(SCHEDULE_SETTINGS_FILE))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    settings.download_delay_ms = crate::api::novel::clamp_request_delay_ms(
+        settings.download_delay_ms,
+    );
+    settings
+}
+
+fn default_download_delay_ms() -> u64 {
+    crate::api::novel::DEFAULT_REQUEST_DELAY_MS
 }
 
 /// Persists the schedule settings.

@@ -238,6 +238,9 @@ struct WebnovelSubscriptionSummary {
     /// Total chapter cap, when one is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     download_limit: Option<u32>,
+    /// Per-subscription request spacing; `None` means the global setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_delay_ms: Option<u64>,
     /// Where the files currently live, when anything was delivered.
     #[serde(skip_serializing_if = "Option::is_none")]
     delivered_to: Option<String>,
@@ -308,6 +311,7 @@ impl WebnovelSubscriptionSummary {
             translation_done: subscription.translation_done,
             media_kind: kind,
             download_limit: subscription.download_limit,
+            download_delay_ms: subscription.download_delay_ms,
             delivered_to: subscription.delivered_to.clone(),
             needs_relocation,
             status_source_url: subscription.status_source_url.clone(),
@@ -731,6 +735,10 @@ struct WebnovelUpdateRequest {
     /// New total chapter cap; zero lifts the limit.
     #[serde(default)]
     download_limit: Option<u32>,
+    /// New per-subscription request spacing in milliseconds; zero uses the
+    /// global setting.
+    #[serde(default)]
+    download_delay_ms: Option<u64>,
     /// New category (`webnovel` or `hwebnovel`).
     #[serde(default)]
     media_kind: Option<String>,
@@ -794,6 +802,10 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
     }
     if let Some(limit) = req.download_limit {
         subscription.download_limit = (limit > 0).then_some(limit);
+    }
+    if let Some(delay_ms) = req.download_delay_ms {
+        subscription.download_delay_ms = (delay_ms > 0)
+            .then(|| crate::api::novel::clamp_request_delay_ms(delay_ms));
     }
     if let Some(kind) = req.media_kind.as_deref().and_then(MediaKind::from_id) {
         if kind.uses_novel_engine() {
@@ -1094,14 +1106,12 @@ fn run_webnovel_check(
         return Ok("Keine passenden Abonnements.".to_string());
     }
 
-    let mut client = match options.delay_ms {
-        Some(delay_ms) => PoliteClient::with_delay_ms(delay_ms)?,
-        None => PoliteClient::new()?,
-    };
+    let global_delay_ms = options
+        .delay_ms
+        .unwrap_or_else(|| load_schedule_settings(system_dir).download_delay_ms);
     // Manual runs may route whitelisted hosts through the browser window.
     let mut uses_window = false;
     if options.manual {
-        client = client.with_renderer(std::sync::Arc::new(|url: &str| render_page_via_window(url)));
         set_current_job_id(Some(job_id.to_string()));
     }
     let mut new_chapters = 0usize;
@@ -1123,6 +1133,15 @@ fn run_webnovel_check(
         }
         if is_webview_routed(&subscription.url) {
             uses_window = true;
+        }
+
+        let delay_ms = subscription
+            .download_delay_ms
+            .unwrap_or(global_delay_ms);
+        let mut client = PoliteClient::with_delay_ms(delay_ms)?;
+        if options.manual {
+            client =
+                client.with_renderer(std::sync::Arc::new(|url: &str| render_page_via_window(url)));
         }
 
         update_webnovel_job(job_id, |status| {
@@ -1549,8 +1568,9 @@ const WEBNOVEL_COVER_NAMES: [&str; 3] = ["cover.jpg", "cover.png", "cover.webp"]
 
 /// Downloads the subscription's cover into the novel folder if not present.
 ///
-/// Non-fatal by design: a missing cover must never block chapter downloads,
-/// so all failures are swallowed after basic validation.
+/// Non-fatal by design: a missing cover must never block chapter downloads.
+/// The network layer still validates the URL and every redirect, caps the
+/// response size and checks the image signature before anything is written.
 /// Returns `true` when a cover file was newly written.
 fn ensure_novel_cover(
     client: &PoliteClient,
@@ -1563,11 +1583,22 @@ fn ensure_novel_cover(
     if load_novel_cover_path(novel_dir).is_some() {
         return false;
     }
-    let Ok(bytes) = client.get_bytes(cover_url) else {
-        return false;
+    let bytes = match client.get_image(cover_url, Some(&subscription.url)) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            debug_log(&format!(
+                "cover: '{}' konnte nicht geladen werden ({}): {error}",
+                subscription.title, cover_url
+            ));
+            return false;
+        }
     };
     // Reject anything that is not actually an image (e.g. an error page).
     let Some(media_type) = detect_image_media_type(&bytes) else {
+        debug_log(&format!(
+            "cover: '{}' lieferte kein unterstütztes Bild ({})",
+            subscription.title, cover_url
+        ));
         return false;
     };
     let file_name = match media_type {
@@ -1575,7 +1606,18 @@ fn ensure_novel_cover(
         "image/webp" => "cover.webp",
         _ => "cover.jpg",
     };
-    fs::write(novel_dir.join(file_name), bytes).is_ok()
+    let target = novel_dir.join(file_name);
+    match crate::deliver::targets::serialized_path_access(|| fs::write(&target, bytes)) {
+        Ok(()) => true,
+        Err(error) => {
+            debug_log(&format!(
+                "cover: '{}' konnte nicht gespeichert werden ({}): {error}",
+                subscription.title,
+                target.display()
+            ));
+            false
+        }
+    }
 }
 
 /// Merges Goodreads metadata into the subscription according to `mode`.

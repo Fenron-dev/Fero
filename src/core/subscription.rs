@@ -148,6 +148,12 @@ pub struct Subscription {
     /// like; ten chapters answer that question. `None` means everything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_limit: Option<u32>,
+    /// Minimum spacing between requests for this subscription.
+    ///
+    /// `None` uses the global download setting. Values are clamped when they
+    /// enter through the desktop API, while old records remain valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_delay_ms: Option<u64>,
     /// Parent directory the files were actually delivered to.
     ///
     /// Normally equal to what the target chain resolves. It differs while the
@@ -268,6 +274,7 @@ impl Subscription {
             status_checked_at: None,
             media_kind: None,
             download_limit: None,
+            download_delay_ms: None,
             delivered_to: None,
             batch_size: None,
             status_source_url: None,

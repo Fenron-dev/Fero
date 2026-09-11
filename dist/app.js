@@ -592,6 +592,9 @@ function openDetail(id) {
   if (item.lastError) fact(facts, "Letzter Fehler", item.lastError);
   if (item.ratingExternal) fact(facts, "Bewertung", `${item.ratingExternal} / 5`);
   if (item.downloadLimit) fact(facts, "Kapitel-Limit", `${item.downloadLimit}`);
+  if (item.downloadDelayMs) {
+    fact(facts, "Abo-Anfrageabstand", `${item.downloadDelayMs} ms`);
+  }
   if (item.deliveredTo) fact(facts, "Dateien liegen in", item.deliveredTo);
 
   const cover = $("detail-cover");
@@ -827,6 +830,7 @@ function fillKindSelect(item) {
   }
   select.value = item.mediaKind;
   $("detail-limit").value = item.downloadLimit || "";
+  $("detail-delay").value = item.downloadDelayMs || "";
 }
 
 $("detail-kind-save").addEventListener("click", async () => {
@@ -838,6 +842,7 @@ $("detail-kind-save").addEventListener("click", async () => {
       id: item.id,
       mediaKind: $("detail-kind").value,
       downloadLimit: Number($("detail-limit").value) || 0,
+      downloadDelayMs: Number($("detail-delay").value) || 0,
     });
     await loadSubscriptions();
     const updated = currentItem();
@@ -1463,6 +1468,7 @@ async function loadSchedule() {
   try {
     const data = await api("schedule");
     $("schedule-interval").value = data.intervalHours;
+    $("download-delay").value = data.downloadDelayMs;
     $("schedule-paused").checked = data.paused;
     $("schedule-quit").checked = data.quitOnClose;
   } catch (error) {
@@ -1474,12 +1480,14 @@ async function saveSchedule() {
   try {
     const data = await post("schedule/save", {
       intervalHours: Number($("schedule-interval").value) || undefined,
+      downloadDelayMs: Number($("download-delay").value) || undefined,
       paused: $("schedule-paused").checked,
       quitOnClose: $("schedule-quit").checked,
     });
     /* Das Backend begrenzt das Intervall auf 1 Stunde bis 7 Tage; den
      * zurueckgegebenen Wert uebernehmen, damit das Feld nicht luegt. */
     $("schedule-interval").value = data.intervalHours;
+    $("download-delay").value = data.downloadDelayMs;
     setFeedback($("schedule-feedback"), "Gespeichert.", "ok");
   } catch (error) {
     setFeedback($("schedule-feedback"), error.message, "error");
@@ -1489,6 +1497,18 @@ async function saveSchedule() {
 $("schedule-save").addEventListener("click", saveSchedule);
 $("schedule-paused").addEventListener("change", saveSchedule);
 $("schedule-quit").addEventListener("change", saveSchedule);
+
+$("download-delay-save").addEventListener("click", async () => {
+  try {
+    const data = await post("schedule/save", {
+      downloadDelayMs: Number($("download-delay").value) || undefined,
+    });
+    $("download-delay").value = data.downloadDelayMs;
+    setFeedback($("download-delay-feedback"), "Gespeichert.", "ok");
+  } catch (error) {
+    setFeedback($("download-delay-feedback"), error.message, "error");
+  }
+});
 
 // ── Blockliste ───────────────────────────────────────────────────────────
 
