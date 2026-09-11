@@ -814,9 +814,8 @@ pub(crate) fn load_schedule_settings(store: &Path) -> ScheduleSettings {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
-    settings.download_delay_ms = crate::api::novel::clamp_request_delay_ms(
-        settings.download_delay_ms,
-    );
+    settings.download_delay_ms =
+        crate::api::novel::clamp_request_delay_ms(settings.download_delay_ms);
     settings
 }
 

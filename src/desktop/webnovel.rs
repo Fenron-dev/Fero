@@ -804,8 +804,8 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
         subscription.download_limit = (limit > 0).then_some(limit);
     }
     if let Some(delay_ms) = req.download_delay_ms {
-        subscription.download_delay_ms = (delay_ms > 0)
-            .then(|| crate::api::novel::clamp_request_delay_ms(delay_ms));
+        subscription.download_delay_ms =
+            (delay_ms > 0).then(|| crate::api::novel::clamp_request_delay_ms(delay_ms));
     }
     if let Some(kind) = req.media_kind.as_deref().and_then(MediaKind::from_id) {
         if kind.uses_novel_engine() {
@@ -1135,9 +1135,7 @@ fn run_webnovel_check(
             uses_window = true;
         }
 
-        let delay_ms = subscription
-            .download_delay_ms
-            .unwrap_or(global_delay_ms);
+        let delay_ms = subscription.download_delay_ms.unwrap_or(global_delay_ms);
         let mut client = PoliteClient::with_delay_ms(delay_ms)?;
         if options.manual {
             client =

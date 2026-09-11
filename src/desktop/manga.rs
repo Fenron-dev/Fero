@@ -38,8 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     current_parent, debug_log, extract_query_value, impl_outcome, load_schedule_settings,
-    resolve_workspace,
-    safe_folder_segment, sanitize_path_segment, Workspace,
+    resolve_workspace, safe_folder_segment, sanitize_path_segment, Workspace,
 };
 use crate::api::manga::{self, status as manga_status, MangaChapterRef, MangaInfo};
 use crate::api::novel::{detect_image_media_type, status::OriginalStatus, PoliteClient};
@@ -860,8 +859,8 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
         subscription.download_limit = (limit > 0).then_some(limit);
     }
     if let Some(delay_ms) = req.download_delay_ms {
-        subscription.download_delay_ms = (delay_ms > 0)
-            .then(|| crate::api::novel::clamp_request_delay_ms(delay_ms));
+        subscription.download_delay_ms =
+            (delay_ms > 0).then(|| crate::api::novel::clamp_request_delay_ms(delay_ms));
     }
     if let Some(kind) = req.media_kind.as_deref().and_then(MediaKind::from_id) {
         if kind.uses_manga_engine() {
@@ -1163,9 +1162,7 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
             status.total_pages = 0;
         });
 
-        let delay_ms = subscription
-            .download_delay_ms
-            .unwrap_or(global_delay_ms);
+        let delay_ms = subscription.download_delay_ms.unwrap_or(global_delay_ms);
         let client = PoliteClient::with_delay_ms(delay_ms)?;
 
         match check_one(ws, &client, &mut subscription, options, job_id) {
