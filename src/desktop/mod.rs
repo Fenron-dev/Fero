@@ -810,7 +810,7 @@ impl Default for ScheduleSettings {
 
 /// Loads the schedule settings; anything unreadable means "use the defaults".
 pub(crate) fn load_schedule_settings(store: &Path) -> ScheduleSettings {
-    let mut settings = fs::read_to_string(store.join(SCHEDULE_SETTINGS_FILE))
+    let mut settings: ScheduleSettings = fs::read_to_string(store.join(SCHEDULE_SETTINGS_FILE))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();

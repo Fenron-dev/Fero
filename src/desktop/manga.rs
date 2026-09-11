@@ -37,7 +37,8 @@ use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    current_parent, debug_log, extract_query_value, impl_outcome, resolve_workspace,
+    current_parent, debug_log, extract_query_value, impl_outcome, load_schedule_settings,
+    resolve_workspace,
     safe_folder_segment, sanitize_path_segment, Workspace,
 };
 use crate::api::manga::{self, status as manga_status, MangaChapterRef, MangaInfo};
