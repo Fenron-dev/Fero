@@ -97,6 +97,17 @@ jobs:
             echo "Beim ersten Start meldet macOS dann 'nicht verifizierter Entwickler'."
           fi
 
+      # Eine veröffentlichte, aber nur ad-hoc signierte App erhält bei TCC eine
+      # codehash-basierte Identität. Nach dem nächsten Build passen gespeicherte
+      # Freigaben für Netzwerkvolumes nicht mehr. Entwicklungsartefakte dürfen
+      # weiterhin ad-hoc sein; ein offizielles Tag darf diesen Zustand nicht
+      # als Release ausliefern.
+      - name: Signatur für Release verlangen
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_APPLE_CERT != 'true'
+        run: |
+          echo "Ein macOS-Release braucht APPLE_CERTIFICATE und die zugehörigen Signier-Secrets."
+          exit 1
+
       # Den Keychain-Import macht der Tauri-Bundler selbst, sobald
       # APPLE_CERTIFICATE und APPLE_CERTIFICATE_PASSWORD gesetzt sind.
       - name: Build (universal DMG)

@@ -26,6 +26,27 @@ const POINTER_FILE: &str = "data-location.json";
 /// Sub-directory of the data folder used as the suggested download fallback.
 const FALLBACK_DIR_NAME: &str = "Downloads";
 
+/// Serializes the first accesses to user-controlled locations.
+///
+/// macOS does not merge simultaneous privacy requests. If the UI asks for the
+/// novel list, manga list and their covers at once, every blocked `stat` can
+/// enqueue its own Network Volumes dialog before the user has answered the
+/// first one. Keeping these short probes behind one gate makes the first answer
+/// authoritative before the next path is touched. On other platforms the same
+/// gate is harmless and still prevents duplicate reachability work.
+static PROTECTED_PATH_ACCESS: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Runs a short metadata/readability probe without overlapping another one.
+///
+/// The lock is deliberately recovered after a panic: poisoning this diagnostic
+/// gate must not make every configured target unusable until the app restarts.
+pub(crate) fn serialized_path_access<T>(action: impl FnOnce() -> T) -> T {
+    let _guard = PROTECTED_PATH_ACCESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    action()
+}
+
 // ---------------------------------------------------------------------------
 // Media kinds
 // ---------------------------------------------------------------------------
@@ -189,18 +210,25 @@ struct Pointer {
 /// (read-only volume, restricted bundle). So a probe file is written and
 /// removed again.
 fn is_usable(dir: &Path) -> std::result::Result<(), String> {
-    if let Err(error) = std::fs::create_dir_all(dir) {
-        return Err(format!("Ordner lässt sich nicht anlegen: {error}"));
-    }
-    let probe = dir.join(".fero-write-test");
-    match std::fs::write(&probe, b"") {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&probe);
-            Ok(())
+    serialized_path_access(|| {
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            return Err(format!("Ordner lässt sich nicht anlegen: {error}"));
         }
-        Err(error) => Err(format!("Ordner ist nicht beschreibbar: {error}")),
-    }
+        let probe = dir.join(".fero-write-test");
+        match std::fs::write(&probe, b"") {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&probe);
+                Ok(())
+            }
+            Err(error) => Err(format!("Ordner ist nicht beschreibbar: {error}")),
+        }
+    })
 }
+
+/// Resolved once per process. The old implementation created and deleted a
+/// write-test file for practically every API request. Apart from unnecessary
+/// I/O, two startup requests could therefore open two macOS privacy dialogs.
+static RESOLVED_DATA_DIR: LazyLock<Mutex<Option<DataDir>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Resolves the data directory.
 ///
@@ -209,6 +237,19 @@ fn is_usable(dir: &Path) -> std::result::Result<(), String> {
 /// back to the home directory on its own, because then nobody would notice that
 /// the portable setup is broken.
 pub fn resolve_data_dir() -> DataDir {
+    let mut cached = RESOLVED_DATA_DIR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(data_dir) = cached.as_ref() {
+        return data_dir.clone();
+    }
+
+    let data_dir = resolve_data_dir_uncached();
+    *cached = Some(data_dir.clone());
+    data_dir
+}
+
+fn resolve_data_dir_uncached() -> DataDir {
     let portable = application_dir().map(|dir| dir.join(PORTABLE_DIR_NAME));
 
     if let Some(candidate) = portable.as_ref() {
@@ -268,7 +309,39 @@ pub fn set_data_dir(dir: &Path) -> Result<()> {
     };
     let body = serde_json::to_string_pretty(&pointer)
         .map_err(|error| FeroError::Serialization(error.to_string()))?;
-    std::fs::write(&path, body).map_err(FeroError::from)
+    std::fs::write(&path, body).map_err(FeroError::from)?;
+
+    let mut cached = RESOLVED_DATA_DIR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cached = Some(DataDir::Chosen(dir.to_path_buf()));
+    Ok(())
+}
+
+/// Warns when Gatekeeper launched the app from a randomized translocation.
+///
+/// A quarantined, ad-hoc signed build gets a code-hash based TCC identity. In
+/// an AppTranslocation path macOS can then fail to match an earlier Network
+/// Volumes grant. The durable remedy is installing a signed build in
+/// `/Applications`; code can only explain that situation, not grant itself
+/// privacy permissions.
+pub(crate) fn installation_warning() -> Option<String> {
+    let executable = std::env::current_exe().ok()?;
+    installation_warning_for(&executable)
+}
+
+fn installation_warning_for(executable: &Path) -> Option<String> {
+    if !executable
+        .components()
+        .any(|part| part.as_os_str() == "AppTranslocation")
+    {
+        return None;
+    }
+
+    Some(
+        "Fero läuft aus einer temporären macOS-AppTranslocation. Bitte Fero beenden, aus dem DMG in den Ordner „Programme“ ziehen und nur die dort installierte App starten. Sonst kann macOS Datei- und Netzwerkfreigaben wiederholt abfragen."
+            .to_string(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -377,21 +450,24 @@ fn is_reachable(dir: &Path) -> bool {
 
 /// The cached lookup behind [`is_reachable`]; `now` is passed in for tests.
 fn reachable_at(dir: &Path, now: Instant) -> bool {
-    if let Ok(cache) = REACHABILITY.lock() {
-        if let Some((asked, answer)) = cache.get(dir) {
-            if now.duration_since(*asked) < REACHABILITY_TTL {
-                return *answer;
-            }
+    // Keep this lock across the filesystem probe. It is the single-flight part
+    // of the cache: callers arriving while macOS shows its permission sheet
+    // wait here and reuse the first result instead of queuing another sheet.
+    let mut cache = REACHABILITY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((asked, answer)) = cache.get(dir) {
+        if now.duration_since(*asked) < REACHABILITY_TTL {
+            return *answer;
         }
     }
 
-    let answer = dir.is_dir() || dir.parent().map(Path::is_dir).unwrap_or(false);
-    if let Ok(mut cache) = REACHABILITY.lock() {
-        // Der Zwischenspeicher darf nicht unbegrenzt wachsen: abgelaufene
-        // Eintraege fliegen raus, sobald ohnehin geschrieben wird.
-        cache.retain(|_, (asked, _)| now.duration_since(*asked) < REACHABILITY_TTL);
-        cache.insert(dir.to_path_buf(), (now, answer));
-    }
+    let answer =
+        serialized_path_access(|| dir.is_dir() || dir.parent().map(Path::is_dir).unwrap_or(false));
+    // Der Zwischenspeicher darf nicht unbegrenzt wachsen: abgelaufene
+    // Eintraege fliegen raus, sobald ohnehin geschrieben wird.
+    cache.retain(|_, (asked, _)| now.duration_since(*asked) < REACHABILITY_TTL);
+    cache.insert(dir.to_path_buf(), (now, answer));
     answer
 }
 
@@ -493,6 +569,20 @@ mod tests {
 
         // Nach Ablauf wird wieder nachgesehen, und dann stimmt sie nicht mehr.
         assert!(!reachable_at(&dir, now + REACHABILITY_TTL));
+    }
+
+    #[test]
+    fn app_translocation_is_reported_with_an_installation_hint() {
+        let executable = Path::new(
+            "/private/var/folders/x/T/AppTranslocation/UUID/d/Fero.app/Contents/MacOS/fero",
+        );
+        let warning = installation_warning_for(executable).expect("warning expected");
+
+        assert!(warning.contains("Programme"));
+        assert!(
+            installation_warning_for(Path::new("/Applications/Fero.app/Contents/MacOS/fero"))
+                .is_none()
+        );
     }
 
     fn settings(defaults: &[(MediaKind, &str)], fallback: Option<&str>) -> TargetSettings {

@@ -7,6 +7,9 @@ pub(super) fn response(status: StatusCode, content_type: &str, body: &str) -> Re
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, content_type)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Cross-Origin-Resource-Policy", "same-origin")
         .body(body.as_bytes().to_vec())
         .expect("response construction should succeed")
 }
@@ -16,6 +19,10 @@ pub(crate) fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Resp
         Ok(body) => Response::builder()
             .status(status)
             .header(CONTENT_TYPE, "application/json; charset=utf-8")
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Referrer-Policy", "no-referrer")
+            .header("Cross-Origin-Resource-Policy", "same-origin")
+            .header("Cache-Control", "no-store")
             .body(body)
             .expect("JSON response construction should succeed"),
         Err(error) => response(
@@ -50,6 +57,9 @@ pub(super) fn bytes_response(
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, content_type)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Cross-Origin-Resource-Policy", "same-origin")
         .body(body)
         .expect("response construction should succeed")
 }

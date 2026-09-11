@@ -78,10 +78,10 @@ pub(super) fn build_webnovel_solve_response(body: &[u8]) -> WebnovelSolveRespons
             }
         }
     };
-    if !req.url.starts_with("http://") && !req.url.starts_with("https://") {
+    if let Err(error) = validate_remote_url(&req.url) {
         return WebnovelSolveResponse {
             host: None,
-            error: Some("Nur http/https-Links erlaubt.".to_string()),
+            error: Some(error.to_string()),
         };
     }
     let Some(host) = host_of(&req.url) else {
@@ -121,6 +121,9 @@ pub(super) fn build_webnovel_solve_response(body: &[u8]) -> WebnovelSolveRespons
         .title("Sicherheitsprüfung bestätigen — Fenster schließt sich automatisch")
         .inner_size(1024.0, 820.0)
         .user_agent(SOLVE_USER_AGENT)
+        .on_navigation(crate::api::novel::is_safe_remote_navigation)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .on_download(|_, _| false)
         .build();
     });
 
@@ -432,7 +435,14 @@ pub(super) fn build_webnovel_login_response(body: &[u8]) -> WebnovelLoginRespons
             error: Some("App-Fenster noch nicht bereit — bitte erneut versuchen.".to_string()),
         };
     };
-    let Ok(login_url) = login_url_for(&host).parse::<tauri::Url>() else {
+    let raw_login_url = login_url_for(&host);
+    if let Err(error) = validate_remote_url(&raw_login_url) {
+        return WebnovelLoginResponse {
+            host: None,
+            error: Some(error.to_string()),
+        };
+    }
+    let Ok(login_url) = raw_login_url.parse::<tauri::Url>() else {
         return WebnovelLoginResponse {
             host: None,
             error: Some("Login-URL konnte nicht gebildet werden.".to_string()),
@@ -458,6 +468,9 @@ pub(super) fn build_webnovel_login_response(body: &[u8]) -> WebnovelLoginRespons
         .title("Anmelden — nach dem Login kannst du dieses Fenster schließen")
         .inner_size(1024.0, 820.0)
         .user_agent(SOLVE_USER_AGENT)
+        .on_navigation(crate::api::novel::is_safe_remote_navigation)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .on_download(|_, _| false)
         .build();
     });
 
@@ -779,6 +792,9 @@ fn navigate_browser_window(handle: &tauri::AppHandle, url: &tauri::Url) {
         .inner_size(1024.0, 820.0)
         .user_agent(SOLVE_USER_AGENT)
         .initialization_script(BROWSER_RELAY_SCRIPT)
+        .on_navigation(crate::api::novel::is_safe_remote_navigation)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .on_download(|_, _| false)
         .build();
     }
 }
@@ -856,6 +872,7 @@ pub(crate) fn close_browser_window() {
 /// Blocks the calling (worker) thread until the injected relay delivers the
 /// page via the window title, a challenge times out, or rendering times out.
 pub(crate) fn render_page_via_window(url: &str) -> Result<String> {
+    validate_remote_url(url)?;
     let handle = APP_HANDLE
         .get()
         .cloned()

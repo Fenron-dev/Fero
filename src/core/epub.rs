@@ -10,7 +10,8 @@
 //! and gives us full control over the output.
 //!
 //! ## Responsibilities:
-//! - Assemble chapters (already-sanitized XHTML bodies) into a valid EPUB 3
+//! - Sanitize every chapter body at the final output boundary
+//! - Assemble chapters into a valid EPUB 3
 //! - Escape all metadata for XML safety
 //!
 //! ## Dependencies:
@@ -20,6 +21,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+use scraper::Html;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -159,6 +161,88 @@ pub fn escape_xml(value: &str) -> String {
     escaped
 }
 
+/// Elements whose entire subtree is dropped during sanitizing.
+const DROP_ELEMENTS: [&str; 14] = [
+    "script", "style", "nav", "iframe", "form", "button", "aside", "footer", "header", "noscript",
+    "svg", "video", "audio", "img",
+];
+/// Elements kept as structural markup; every attribute is discarded.
+const KEEP_ELEMENTS: [&str; 15] = [
+    "p",
+    "br",
+    "hr",
+    "em",
+    "strong",
+    "i",
+    "b",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "blockquote",
+    "ul",
+    "ol",
+    "li",
+];
+const VOID_ELEMENTS: [&str; 2] = ["br", "hr"];
+
+/// Converts arbitrary HTML into an inert, well-formed XHTML body fragment.
+///
+/// The allowlist contains no executable, network-loading or linking element.
+/// Attributes are never copied. This function is used by source adapters for
+/// early cleanup and again by the EPUB writer as its final trust boundary.
+pub fn sanitize_xhtml_fragment(fragment: &str) -> String {
+    let parsed = Html::parse_fragment(fragment);
+    let mut out = String::with_capacity(fragment.len());
+    for child in parsed.tree.root().children() {
+        sanitize_node(child, &mut out);
+    }
+    collapse_blank_paragraphs(&out)
+}
+
+fn sanitize_node(node: ego_tree::NodeRef<'_, scraper::Node>, out: &mut String) {
+    match node.value() {
+        scraper::Node::Text(text) => out.push_str(&escape_xml(&text.text)),
+        scraper::Node::Element(element) => {
+            let name = element.name();
+            if DROP_ELEMENTS.contains(&name) {
+                return;
+            }
+            if KEEP_ELEMENTS.contains(&name) {
+                if VOID_ELEMENTS.contains(&name) {
+                    out.push_str(&format!("<{name}/>"));
+                    return;
+                }
+                out.push_str(&format!("<{name}>"));
+                for child in node.children() {
+                    sanitize_node(child, out);
+                }
+                out.push_str(&format!("</{name}>"));
+                return;
+            }
+            for child in node.children() {
+                sanitize_node(child, out);
+            }
+        }
+        _ => {
+            for child in node.children() {
+                sanitize_node(child, out);
+            }
+        }
+    }
+}
+
+fn collapse_blank_paragraphs(xhtml: &str) -> String {
+    let mut result = xhtml.to_string();
+    loop {
+        let collapsed = result.replace("<p> </p>", "").replace("<p></p>", "");
+        if collapsed == result {
+            return result;
+        }
+        result = collapsed;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -282,6 +366,7 @@ fn render_nav(meta: &EpubMeta, chapters: &[EpubChapter]) -> String {
 }
 
 fn render_chapter(chapter: &EpubChapter) -> String {
+    let safe_body = sanitize_xhtml_fragment(&chapter.xhtml_body);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -296,7 +381,7 @@ fn render_chapter(chapter: &EpubChapter) -> String {
 </html>
 "#,
         title = escape_xml(&chapter.title),
-        body = chapter.xhtml_body,
+        body = safe_body,
     )
 }
 
@@ -419,5 +504,35 @@ mod tests {
         let target = dir.join("empty.epub");
         let result = write_epub(&target, &sample_meta(), &[]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn epub_boundary_removes_active_content_and_remote_resources() {
+        let chapter = EpubChapter {
+            title: "Unsafe <title>".to_string(),
+            xhtml_body: r#"<p onclick="alert(1)">Keep me</p>
+                <script>fetch('https://evil.example')</script>
+                <img src="https://evil.example/track.png"/>
+                <a href="javascript:alert(1)">plain link text</a>
+                <iframe src="https://evil.example"></iframe>"#
+                .to_string(),
+        };
+
+        let rendered = render_chapter(&chapter);
+        assert!(rendered.contains("<p>Keep me</p>"));
+        assert!(rendered.contains("plain link text"));
+        assert!(rendered.contains("Unsafe &lt;title&gt;"));
+        for forbidden in [
+            "<script",
+            "<img",
+            "<iframe",
+            "onclick",
+            "javascript:",
+            "evil.example",
+            "href=",
+            "src=",
+        ] {
+            assert!(!rendered.contains(forbidden), "survived: {forbidden}");
+        }
     }
 }

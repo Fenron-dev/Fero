@@ -2,7 +2,8 @@
 
 /* Fero — Oberfläche.
  *
- * Vier Ansichten: Abos, Abo-Detail, Einstellungen, Protokoll. Kein Framework
+ * Ansichten für Abos, Details, Quellen, Einstellungen, Papierkorb und
+ * Protokoll. Kein Framework
  * und kein Bundler; die CSP erlaubt ohnehin nur eigene Skripte, und ein
  * Beschaffungswerkzeug soll sofort da sein.
  *
@@ -26,6 +27,46 @@ let subscriptions = [];
 let currentDetailId = null;
 let jobTimer = null;
 let dataDir = null;
+
+/* Sichtbarer Katalog der implementierten Adapter. Einträge werden wie alle
+ * fremden Texte ausschließlich als Textknoten gerendert; hier entstehen keine
+ * anklickbaren Remote-Links und damit auch keine zusätzliche WebView-Fläche. */
+const SOURCE_CATALOG = {
+  webnovel: {
+    summary: "14 Einträge mit eigenen, gemeinsamen oder heuristischen Adaptern.",
+    entries: [
+      { name: "Royal Road", hosts: "royalroad.com", note: "Eigener Adapter" },
+      { name: "Divine Dao Library", hosts: "divinedaolibrary.com", note: "WordPress-Adapter" },
+      { name: "NovelFull", hosts: "novelfull.com · novelfull.net · novgo.net · readnovelfull.com", note: "Gemeinsamer NovelFull-Adapter" },
+      { name: "Novelight", hosts: "novelight.net", note: "Eigener Adapter (Best Effort)" },
+      { name: "Novel Phoenix", hosts: "novelphoenix.com", note: "Eigener Adapter" },
+      { name: "NovelUpdates", hosts: "novelupdates.com", note: "Browserfenster und ggf. Anmeldung" },
+      { name: "WTR-Lab", hosts: "wtr-lab.com", note: "Eigener API-Adapter" },
+      { name: "FreeWebNovel", hosts: "freewebnovel.com", note: "Browserfenster · heuristischer Adapter" },
+      { name: "LightNovelPub", hosts: "lightnovelpub.me", note: "Browserfenster · eigener Adapter" },
+      { name: "Chikari", hosts: "chikari.moe", note: "Eigener API-Adapter" },
+      { name: "NovelFire", hosts: "novelfire.net", note: "Browserfenster · eigener Adapter" },
+      { name: "NovelArrow", hosts: "novelarrow.com", note: "Browserfenster · eigener Adapter" },
+      { name: "NovelLunar", hosts: "novellunar.com", note: "Browserfenster · heuristischer Adapter" },
+      { name: "Weitere HTML-Seiten", hosts: "beliebige öffentliche HTTP(S)-Quelle", note: "Heuristischer Adapter; Seitenaufbau muss erkennbar sein" },
+    ],
+  },
+  manga: {
+    summary: "6 Einträge mit fest zugeordneten Manga- und Webtoon-Adaptern.",
+    entries: [
+      { name: "MangaTown", hosts: "mangatown.com", note: "Eigener Adapter" },
+      { name: "FanFox", hosts: "fanfox.net · mangafox.la", note: "Gemeinsamer FanFox-Adapter" },
+      { name: "Webtoons", hosts: "webtoons.com", note: "Eigener Webtoon-Adapter" },
+      { name: "MangaRead", hosts: "mangaread.org", note: "Madara-Adapter" },
+      { name: "ManhuaPlus", hosts: "manhuaplus.com", note: "Madara-Adapter" },
+      { name: "Hentai20", hosts: "hentai20.io", note: "Themesia-Adapter" },
+    ],
+  },
+  podcast: {
+    summary: "Der Zieltyp ist vorbereitet; ein Podcast-Downloader ist noch nicht implementiert.",
+    entries: [],
+  },
+};
 
 // ── Kleinkram ────────────────────────────────────────────────────────────
 
@@ -87,7 +128,7 @@ const post = (path, payload) =>
 
 /** Fragt den Nutzer nach einem Ordner. Gibt null zurück, wenn er abbricht. */
 async function pickFolder() {
-  const data = await api("select-folder");
+  const data = await post("select-folder", {});
   return data.path || null;
 }
 
@@ -134,10 +175,51 @@ function showView(name) {
   });
 }
 
+function showSourceKind(kind) {
+  const catalog = SOURCE_CATALOG[kind] || SOURCE_CATALOG.webnovel;
+  const list = $("source-list");
+  clear(list);
+  $("source-summary").textContent = catalog.summary;
+
+  document.querySelectorAll(".source-tab").forEach((tab) => {
+    const active = tab.dataset.sourceKind === kind;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+    tab.tabIndex = active ? 0 : -1;
+  });
+  $("source-panel").setAttribute("aria-labelledby", `source-tab-${kind}`);
+
+  if (catalog.entries.length === 0) {
+    list.appendChild(el("div", "source-empty", "Noch keine Download-Quellen verfügbar."));
+    return;
+  }
+
+  for (const source of catalog.entries) {
+    const entry = el("article", "source-entry");
+    entry.appendChild(el("div", "source-entry-title", source.name));
+    entry.appendChild(el("div", "source-entry-hosts", source.hosts));
+    entry.appendChild(el("div", "source-entry-note", source.note));
+    list.appendChild(entry);
+  }
+}
+
+document.querySelectorAll(".source-tab").forEach((tab) => {
+  tab.addEventListener("click", () => showSourceKind(tab.dataset.sourceKind));
+  tab.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const tabs = [...document.querySelectorAll(".source-tab")];
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = tabs[(tabs.indexOf(tab) + direction + tabs.length) % tabs.length];
+    showSourceKind(next.dataset.sourceKind);
+    next.focus();
+  });
+});
+
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => {
     const view = item.dataset.view;
     showView(view);
+    if (view === "sources") showSourceKind("webnovel");
     if (view === "settings") {
       loadTargets();
       loadSchedule();
@@ -673,13 +755,6 @@ async function runPlatformSearch() {
 
 function searchHitRow(hit) {
   const row = el("div", "search-hit");
-  if (hit.coverUrl) {
-    const img = el("img");
-    img.src = hit.coverUrl;
-    img.loading = "lazy";
-    img.alt = "";
-    row.appendChild(img);
-  }
 
   const text = el("div", "grow");
   text.appendChild(el("div", "card-title", hit.title));
@@ -936,7 +1011,7 @@ $("detail-check").addEventListener("click", async () => {
 /* Quelle und Plattformen im Systembrowser. Die Knoepfe stehen nur da, wenn es
  * die Seite auch gibt — ein Knopf, der „nicht verlinkt" meldet, ist Ballast. */
 function openExternal(url) {
-  return api(`open-url?url=${encodeURIComponent(url)}`).catch((error) => {
+  return post("open-url", { url }).catch((error) => {
     setFeedback($("detail-feedback"), error.message, "error");
   });
 }
@@ -1242,6 +1317,9 @@ async function loadTargets() {
   }
 
   dataDir = data.dataDir || null;
+  const installationWarning = $("installation-warning");
+  installationWarning.textContent = data.installationWarning || "";
+  installationWarning.hidden = !data.installationWarning;
   $("data-dir").textContent = data.dataDir || "noch nicht eingerichtet";
   setFeedback($("data-dir-problem"), data.dataDirProblem || "", "error");
   if (data.dataDir) {
@@ -1486,7 +1564,7 @@ async function loadLog() {
 $("log-reload").addEventListener("click", loadLog);
 $("log-open").addEventListener("click", async () => {
   try {
-    await api("webnovel/open-debug-log");
+    await post("webnovel/open-debug-log", {});
   } catch (error) {
     status(error.message, true);
   }
@@ -1495,6 +1573,7 @@ $("log-open").addEventListener("click", async () => {
 // ── Start ────────────────────────────────────────────────────────────────
 
 (async function start() {
+  showSourceKind("webnovel");
   $("view-list").classList.toggle("is-active", viewMode === "list");
   $("view-grid").classList.toggle("is-active", viewMode === "grid");
   // Zuerst die Ziele: sie liefern die Medientypen, aus denen sich die

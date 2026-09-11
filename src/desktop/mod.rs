@@ -31,8 +31,8 @@ use crate::api::anilist::{AniListAnimeMetadata, AniListClient};
 use crate::api::goodreads::GoodreadsClient;
 use crate::api::novel::{
     clear_browser_session, detect_image_media_type, detect_source, host_of, is_webview_routed,
-    sanitize_to_xhtml, set_browser_session, BrowserSession, ChapterContent, ChapterRef,
-    PoliteClient,
+    sanitize_to_xhtml, set_browser_session, validate_remote_url, BrowserSession, ChapterContent,
+    ChapterRef, PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
 use crate::core::subscription::is_valid_subscription_id;
@@ -46,7 +46,8 @@ use crate::core::webnovel::{
 use crate::deliver::manifest;
 use crate::deliver::migrate::{migrate_store_from_library, Outcome as MigrationOutcome};
 use crate::deliver::targets::{
-    resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution, TargetSettings,
+    installation_warning, resolve_data_dir, resolve_target, DataDir, MediaKind, TargetResolution,
+    TargetSettings,
 };
 use crate::error::{FeroError, Result};
 use serde::{Deserialize, Serialize};
@@ -902,6 +903,9 @@ struct TargetsResponse {
     data_dir_problem: Option<String>,
     /// Whether the data directory sits next to the application.
     portable: bool,
+    /// Actionable warning when Gatekeeper runs the app from AppTranslocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installation_warning: Option<String>,
     kinds: Vec<TargetKindView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fallback: Option<String>,
@@ -922,6 +926,7 @@ fn build_targets_response() -> TargetsResponse {
         data_dir,
         data_dir_problem,
         portable,
+        installation_warning: installation_warning(),
         kinds: MediaKind::ALL
             .iter()
             .map(|kind| TargetKindView {
@@ -1321,14 +1326,20 @@ fn build_save_targets_response(body: &[u8]) -> TargetsResponse {
     build_targets_response()
 }
 
+#[derive(Deserialize)]
+struct OpenUrlRequest {
+    url: String,
+}
+
 /// Only `http`/`https` URLs are accepted — anything else (file paths, custom
 /// schemes) is rejected so this endpoint cannot be abused to launch local
 /// programs or leak files.
-fn build_open_url_response(query: Option<&str>) -> SimpleResponse {
-    let url = match query.and_then(|q| extract_query_value(q, "url")) {
-        Some(url) => url,
-        None => return SimpleResponse::error("missing url"),
+fn build_open_url_response(body: &[u8]) -> SimpleResponse {
+    let req: OpenUrlRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => return SimpleResponse::error(format!("Invalid request: {error}")),
     };
+    let url = req.url;
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return SimpleResponse::error("Nur http/https-Links erlaubt.");
     }

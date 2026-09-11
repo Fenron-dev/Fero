@@ -1649,10 +1649,12 @@ pub(super) fn enrich_from_anilist(subscription: &mut Subscription) {
 
 /// Returns the existing cover file path inside a novel folder, if any.
 pub(super) fn load_novel_cover_path(novel_dir: &Path) -> Option<PathBuf> {
-    WEBNOVEL_COVER_NAMES
-        .iter()
-        .map(|name| novel_dir.join(name))
-        .find(|path| path.exists())
+    crate::deliver::targets::serialized_path_access(|| {
+        WEBNOVEL_COVER_NAMES
+            .iter()
+            .map(|name| novel_dir.join(name))
+            .find(|path| path.exists())
+    })
 }
 
 /// Loads the novel's cover for EPUB embedding, if one is cached.

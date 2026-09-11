@@ -17,6 +17,9 @@
       <span class="nav-label">Abos</span>
       <span class="nav-count" id="nav-count-subscriptions"></span>
     </button>
+    <button class="nav-item" data-view="sources">
+      <span class="nav-label">Quellen</span>
+    </button>
     <button class="nav-item" data-view="settings">
       <span class="nav-label">Einstellungen</span>
     </button>
@@ -35,6 +38,8 @@
   </nav>
 
   <main class="main">
+    <div class="status-banner" id="installation-warning" hidden></div>
+
     <div class="job-banner" id="job-banner" hidden>
       <div class="job-text">
         <strong id="job-title">Prüfe …</strong>
@@ -101,6 +106,60 @@
 
       <div class="cards" id="subscription-list"></div>
       <p class="empty" id="subscription-empty" hidden></p>
+    </section>
+
+    <!-- Unterstützte Download-Quellen -->
+    <section class="view" data-view="sources">
+      <header class="view-head">
+        <h1>Quellen</h1>
+      </header>
+      <p class="hint">
+        Seiten, für die Fero derzeit einen Downloadweg kennt. Einige Quellen
+        benötigen beim manuellen Prüfen ein separates Browserfenster für
+        Anmeldung, JavaScript oder eine Sicherheitsprüfung.
+      </p>
+
+      <div class="source-tabs" role="tablist" aria-label="Quellen nach Medientyp">
+        <button
+          class="source-tab is-active"
+          id="source-tab-webnovel"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="source-panel"
+          data-source-kind="webnovel"
+        >Webnovel</button>
+        <button
+          class="source-tab"
+          id="source-tab-manga"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="source-panel"
+          data-source-kind="manga"
+          tabindex="-1"
+        >Manga</button>
+        <button
+          class="source-tab"
+          id="source-tab-podcast"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="source-panel"
+          data-source-kind="podcast"
+          tabindex="-1"
+        >Podcast</button>
+      </div>
+
+      <div
+        class="source-panel"
+        id="source-panel"
+        role="tabpanel"
+        aria-labelledby="source-tab-webnovel"
+      >
+        <div class="source-summary" id="source-summary"></div>
+        <div class="source-grid" id="source-list"></div>
+      </div>
     </section>
 
     <!-- Abo-Detail -->

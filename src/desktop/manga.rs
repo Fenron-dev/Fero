@@ -1684,10 +1684,12 @@ fn manga_trash_folder(delivery_parent: &Path, subscription: &Subscription) -> Pa
 
 /// Returns the existing cover file path inside a series folder, if any.
 pub(super) fn manga_cover_path(series_dir: &Path) -> Option<PathBuf> {
-    MANGA_COVER_NAMES
-        .iter()
-        .map(|name| series_dir.join(name))
-        .find(|path| path.exists())
+    crate::deliver::targets::serialized_path_access(|| {
+        MANGA_COVER_NAMES
+            .iter()
+            .map(|name| series_dir.join(name))
+            .find(|path| path.exists())
+    })
 }
 
 /// Builds the CBZ file name for a chapter.

@@ -16,8 +16,11 @@
 //! - `scraper` – HTML parsing
 //! - `reqwest::blocking` – synchronous HTTP inside URI-scheme handler threads
 
+pub mod chikari;
 pub mod generic;
+pub mod lightnovelpub;
 pub mod novelarrow;
+pub mod novelfire;
 pub mod novelfull;
 pub mod novelight;
 pub mod novelphoenix;
@@ -28,12 +31,18 @@ pub mod wordpress;
 pub mod wtrlab;
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use scraper::{Html, Selector};
 
 use crate::error::{FeroError, Result};
+
+// Sanitizing lives at the EPUB boundary in `core`; adapters use the same
+// implementation while downloading, and the writer repeats it before output.
+pub use crate::core::epub::sanitize_xhtml_fragment as sanitize_to_xhtml;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -100,29 +109,35 @@ pub trait NovelSource {
 /// Unknown hosts fall back to the heuristic [`generic::GenericSource`].
 pub fn detect_source(url: &str) -> Box<dyn NovelSource> {
     let host = host_of(url).unwrap_or_default();
-    if host.ends_with("royalroad.com") {
+    if host_matches(&host, "royalroad.com") {
         Box::new(royalroad::RoyalRoadSource)
-    } else if host.ends_with("divinedaolibrary.com") {
+    } else if host_matches(&host, "divinedaolibrary.com") {
         Box::new(wordpress::WordPressSource)
-    } else if host.ends_with("novelfull.com")
-        || host.ends_with("novelfull.net")
-        || host.ends_with("novgo.net")
-        || host.ends_with("readnovelfull.com")
+    } else if host_matches(&host, "novelfull.com")
+        || host_matches(&host, "novelfull.net")
+        || host_matches(&host, "novgo.net")
+        || host_matches(&host, "readnovelfull.com")
     {
         // NovelFull and its engine clones share markup (incl. the AJAX
         // chapter archive on readnovelfull-style sites).
         Box::new(novelfull::NovelFullSource)
-    } else if host.ends_with("novelight.net") {
+    } else if host_matches(&host, "novelight.net") {
         Box::new(novelight::NovelightSource)
-    } else if host.ends_with("novelphoenix.com") {
+    } else if host_matches(&host, "novelphoenix.com") {
         Box::new(novelphoenix::NovelPhoenixSource)
-    } else if host.ends_with("novelupdates.com") {
+    } else if host_matches(&host, "lightnovelpub.me") {
+        Box::new(lightnovelpub::LightNovelPubSource)
+    } else if host_matches(&host, "chikari.moe") {
+        Box::new(chikari::ChikariSource)
+    } else if host_matches(&host, "novelfire.net") {
+        Box::new(novelfire::NovelFireSource)
+    } else if host_matches(&host, "novelupdates.com") {
         Box::new(novelupdates::NovelUpdatesSource)
-    } else if host.ends_with("wtr-lab.com") {
+    } else if host_matches(&host, "wtr-lab.com") {
         // Next.js-Anwendung: Metadaten im __NEXT_DATA__, Kapitelliste und
         // Kapiteltext je hinter einem eigenen API-Aufruf.
         Box::new(wtrlab::WtrLabSource)
-    } else if host.ends_with("novelarrow.com") {
+    } else if host_matches(&host, "novelarrow.com") {
         // JS-rendered SPA — fetched through the browser window; dedicated
         // adapter reads the full chapter list from the "chapters" tab.
         Box::new(novelarrow::NovelArrowSource)
@@ -133,6 +148,12 @@ pub fn detect_source(url: &str) -> Box<dyn NovelSource> {
         // fully-rendered HTML, which the heuristic parses like any other page.
         Box::new(generic::GenericSource)
     }
+}
+
+/// Exact host-or-subdomain match without accepting lookalike domains such as
+/// `notnovelfire.net`.
+fn host_matches(host: &str, expected: &str) -> bool {
+    host == expected || host.ends_with(&format!(".{expected}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +177,14 @@ const MIN_ALLOWED_DELAY_MS: u64 = 500;
 const MAX_ALLOWED_DELAY_MS: u64 = 5_000;
 /// Per-request timeout.
 const REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Largest decompressed HTML/API response kept in memory.
+const MAX_TEXT_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+/// Largest cover or manga page accepted by the shared HTTP layer.
+///
+/// Manga validates the same limit again before writing a CBZ. Enforcing it
+/// while reading is what prevents a hostile or broken server from exhausting
+/// memory before that validation gets a chance to run.
+const MAX_BINARY_RESPONSE_BYTES: usize = 20 * 1024 * 1024;
 /// Retry attempts on transient failures (429/5xx/network).
 const MAX_RETRIES: u32 = 3;
 /// Backoff before each retry attempt, in seconds.
@@ -173,14 +202,17 @@ pub struct BrowserSession {
 
 /// Hosts whose pages must be fetched through the embedded browser window,
 /// not plain HTTP — either Cloudflare binds clearance to the browser's TLS
-/// fingerprint (novelupdates, freewebnovel) or the content is rendered
-/// client-side by JavaScript (novellunar, novelarrow).  These are only ever
-/// routed on an explicit, manual user action (never in background checks).
-pub const WEBVIEW_ROUTED_HOSTS: [&str; 4] = [
+/// fingerprint (novelupdates, freewebnovel, lightnovelpub, novelfire) or the
+/// content is rendered client-side by JavaScript (novellunar, novelarrow).
+/// These are only ever routed on an explicit, manual user action (never in
+/// background checks).
+pub const WEBVIEW_ROUTED_HOSTS: [&str; 6] = [
     "novelupdates.com",
     "novellunar.com",
     "novelarrow.com",
     "freewebnovel.com",
+    "lightnovelpub.me",
+    "novelfire.net",
 ];
 
 /// Returns true when a URL's host must go through the browser window.
@@ -259,6 +291,18 @@ impl PoliteClient {
         let client = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            // A source page controls its redirect targets. Validate every hop
+            // so a public page cannot bounce Fero into localhost, a NAS or a
+            // cloud instance metadata service.
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 10 {
+                    return attempt.error("too many redirects");
+                }
+                match validate_parsed_remote_url(attempt.url(), true) {
+                    Ok(()) => attempt.follow(),
+                    Err(error) => attempt.error(std::io::Error::other(error.to_string())),
+                }
+            }))
             .build()
             .map_err(|e| FeroError::ExternalApi(format!("HTTP client init failed: {e}")))?;
         Ok(Self {
@@ -304,6 +348,7 @@ impl PoliteClient {
     /// # Errors
     /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn get_text_with(&self, url: &str, headers: &[(&str, &str)]) -> Result<(String, String)> {
+        validate_remote_url(url)?;
         // Whitelisted hosts go through the browser window when a renderer is
         // attached — plain HTTP either can't pass Cloudflare (TLS-bound) or
         // never sees the JS-rendered content.
@@ -359,6 +404,13 @@ impl PoliteClient {
 
     /// Shared retry loop behind [`Self::get_bytes`] and [`Self::get_image`].
     fn fetch_bytes(&self, url: &str, referer: Option<&str>, delay: Duration) -> Result<Vec<u8>> {
+        validate_remote_url(url)?;
+        if let Some(referer) = referer {
+            // Referer is only a header, but accepting control characters or a
+            // non-web scheme here would still let hostile adapter data poison
+            // the request builder.
+            validate_remote_url_syntax(referer)?;
+        }
         let mut attempt = 0;
         loop {
             self.respect_delay_with(url, delay);
@@ -406,12 +458,21 @@ impl PoliteClient {
                 "{url} answered with status {status}"
             ))));
         }
-        let bytes = response.bytes().map_err(|e| {
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_BINARY_RESPONSE_BYTES as u64)
+        {
+            return Err(response_too_large(url, MAX_BINARY_RESPONSE_BYTES));
+        }
+        let bytes = read_limited(response, MAX_BINARY_RESPONSE_BYTES).map_err(|e| {
             RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "reading body of {url} failed: {e}"
             )))
         })?;
-        Ok(bytes.to_vec())
+        if bytes.len() > MAX_BINARY_RESPONSE_BYTES {
+            return Err(response_too_large(url, MAX_BINARY_RESPONSE_BYTES));
+        }
+        Ok(bytes)
     }
 
     fn try_get(
@@ -441,6 +502,7 @@ impl PoliteClient {
     /// # Errors
     /// - `FeroError::ExternalApi` on HTTP errors after retries are exhausted
     pub fn post_json(&self, url: &str, body: String, headers: &[(&str, &str)]) -> Result<String> {
+        validate_remote_url(url)?;
         let mut attempt = 0;
         loop {
             self.respect_delay(url);
@@ -518,12 +580,21 @@ impl PoliteClient {
             ))));
         }
 
-        let body = response.text().map_err(|e| {
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_TEXT_RESPONSE_BYTES as u64)
+        {
+            return Err(response_too_large(url, MAX_TEXT_RESPONSE_BYTES));
+        }
+        let body = read_limited(response, MAX_TEXT_RESPONSE_BYTES).map_err(|e| {
             RequestFailure::Transient(FeroError::ExternalApi(format!(
                 "reading body of {url} failed: {e}"
             )))
         })?;
-        Ok((final_url, body))
+        if body.len() > MAX_TEXT_RESPONSE_BYTES {
+            return Err(response_too_large(url, MAX_TEXT_RESPONSE_BYTES));
+        }
+        Ok((final_url, String::from_utf8_lossy(&body).into_owned()))
     }
 
     /// Sleeps just long enough to honor the per-host minimum request spacing.
@@ -554,6 +625,24 @@ impl PoliteClient {
     }
 }
 
+/// Reads at most one byte beyond `limit`, enough to distinguish an exact-size
+/// response from an oversized one without buffering the rest of the stream.
+fn read_limited(mut reader: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut body = Vec::with_capacity(limit.min(64 * 1024));
+    reader
+        .by_ref()
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut body)?;
+    Ok(body)
+}
+
+fn response_too_large(url: &str, limit: usize) -> RequestFailure {
+    RequestFailure::Fatal(FeroError::ExternalApi(format!(
+        "response from {url} exceeds the {} MiB limit",
+        limit / (1024 * 1024)
+    )))
+}
+
 /// Distinguishes retryable failures from permanent ones.
 enum RequestFailure {
     Transient(FeroError),
@@ -579,42 +668,149 @@ fn is_cloudflare_challenge(response: &reqwest::blocking::Response) -> bool {
 // Shared HTML utilities
 // ---------------------------------------------------------------------------
 
-/// Extracts the host part of an URL without pulling in an URL crate.
+/// Extracts the normalized host part of an absolute URL.
 pub fn host_of(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest)?;
-    let host_port = after_scheme.split(['/', '?', '#']).next()?;
-    let host = host_port.split(':').next()?;
-    if host.is_empty() {
-        None
-    } else {
-        Some(host.to_ascii_lowercase())
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed.host_str().map(normalized_host)
+}
+
+fn normalized_host(host: &str) -> String {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+/// Rejects network targets that a downloaded page must never be able to make
+/// the desktop app contact: non-web schemes, embedded credentials, localhost,
+/// private/link-local IP space and hostnames resolving into those ranges.
+pub fn validate_remote_url(url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| unsafe_url_error(url, "ungültige URL"))?;
+    validate_parsed_remote_url(&parsed, true)
+}
+
+/// Cheap navigation check for foreign WebViews. DNS resolution is done before
+/// their initial URL is opened; this callback must remain quick while still
+/// blocking custom schemes and literal local/private destinations on every
+/// later page navigation.
+pub fn is_safe_remote_navigation(url: &reqwest::Url) -> bool {
+    validate_parsed_remote_url(url, false).is_ok()
+}
+
+fn validate_remote_url_syntax(url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| unsafe_url_error(url, "ungültige URL"))?;
+    validate_parsed_remote_url(&parsed, false)
+}
+
+fn validate_parsed_remote_url(url: &reqwest::Url, resolve_dns: bool) -> Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(unsafe_url_error(url.as_str(), "nur HTTP(S) ist erlaubt"));
     }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(unsafe_url_error(
+            url.as_str(),
+            "eingebettete Zugangsdaten sind nicht erlaubt",
+        ));
+    }
+    let host = url
+        .host_str()
+        .map(normalized_host)
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| unsafe_url_error(url.as_str(), "Host fehlt"))?;
+
+    if host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host == "home.arpa"
+        || host.ends_with(".home.arpa")
+    {
+        return Err(unsafe_url_error(url.as_str(), "lokaler Host ist gesperrt"));
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_non_public_ip(ip) {
+            return Err(unsafe_url_error(
+                url.as_str(),
+                "private oder lokale IP-Adresse ist gesperrt",
+            ));
+        }
+        return Ok(());
+    }
+
+    if resolve_dns {
+        let port = url.port_or_known_default().unwrap_or(443);
+        let addresses = (host.as_str(), port)
+            .to_socket_addrs()
+            .map_err(|error| unsafe_url_error(url.as_str(), &format!("DNS-Fehler: {error}")))?
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err(unsafe_url_error(url.as_str(), "Host hat keine Adresse"));
+        }
+        if addresses
+            .iter()
+            .any(|address| is_non_public_ip(address.ip()))
+        {
+            return Err(unsafe_url_error(
+                url.as_str(),
+                "Host verweist auf ein privates oder lokales Netz",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_non_public_ipv4(ip),
+        IpAddr::V6(ip) => is_non_public_ipv6(ip),
+    }
+}
+
+fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || a == 0
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+        || a >= 240
+}
+
+fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_non_public_ipv4(v4);
+    }
+    let first = ip.segments()[0];
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || first & 0xfe00 == 0xfc00 // unique-local fc00::/7
+        || first & 0xffc0 == 0xfe80 // link-local fe80::/10
+        || first & 0xffc0 == 0xfec0 // deprecated site-local fec0::/10
+}
+
+fn unsafe_url_error(url: &str, reason: &str) -> FeroError {
+    FeroError::ExternalApi(format!(
+        "Unsicheres Netzwerkziel abgelehnt ({reason}): {url}"
+    ))
 }
 
 /// Resolves an `href` against the page URL it appeared on.
 pub fn absolutize(base_url: &str, href: &str) -> String {
     let href = href.trim();
-    if href.starts_with("http://") || href.starts_with("https://") {
-        return href.to_string();
-    }
-    if let Some(rest) = href.strip_prefix("//") {
-        let scheme = base_url.split("://").next().unwrap_or("https");
-        return format!("{scheme}://{rest}");
-    }
-    if href.starts_with('/') {
-        if let (Some(scheme_end), Some(host)) = (base_url.find("://"), host_of(base_url)) {
-            let scheme = &base_url[..scheme_end];
-            return format!("{scheme}://{host}{href}");
-        }
-        return href.to_string();
-    }
-    // Relative path: append to the base URL's directory.
-    let base_dir = match base_url.rfind('/') {
-        // Keep everything up to (and including) the last slash after the scheme.
-        Some(pos) if pos > base_url.find("://").map(|i| i + 2).unwrap_or(0) => &base_url[..=pos],
-        _ => base_url,
-    };
-    format!("{}/{}", base_dir.trim_end_matches('/'), href)
+    reqwest::Url::parse(base_url)
+        .and_then(|base| base.join(href))
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| href.to_string())
 }
 
 /// Extracts the page's `og:image` URL — the most reliable cover source on
@@ -669,94 +865,6 @@ pub fn extract_content(html: &Html, selectors: &[&str]) -> Option<String> {
     None
 }
 
-/// Elements whose entire subtree is dropped during sanitizing.
-const DROP_ELEMENTS: [&str; 14] = [
-    "script", "style", "nav", "iframe", "form", "button", "aside", "footer", "header", "noscript",
-    "svg", "video", "audio", "img",
-];
-/// Elements kept as-is (attributes stripped).
-const KEEP_ELEMENTS: [&str; 15] = [
-    "p",
-    "br",
-    "hr",
-    "em",
-    "strong",
-    "i",
-    "b",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "blockquote",
-    "ul",
-    "ol",
-    "li",
-];
-/// Void elements that must be self-closed in XHTML.
-const VOID_ELEMENTS: [&str; 2] = ["br", "hr"];
-
-/// Converts an arbitrary HTML fragment into a conservative XHTML fragment.
-///
-/// Only a small whitelist of structural tags survives; everything else is
-/// either unwrapped to its children (e.g. `div`, `span`, `a`) or dropped
-/// entirely (scripts, navigation, media).  All text is entity-escaped, so the
-/// output is always well-formed XHTML — a requirement for EPUB readers.
-pub fn sanitize_to_xhtml(fragment: &str) -> String {
-    let parsed = Html::parse_fragment(fragment);
-    let mut out = String::with_capacity(fragment.len());
-    for child in parsed.tree.root().children() {
-        sanitize_node(child, &mut out);
-    }
-    collapse_blank_paragraphs(&out)
-}
-
-fn sanitize_node(node: ego_tree::NodeRef<'_, scraper::Node>, out: &mut String) {
-    match node.value() {
-        scraper::Node::Text(text) => out.push_str(&crate::core::epub::escape_xml(&text.text)),
-        scraper::Node::Element(element) => {
-            let name = element.name();
-            if DROP_ELEMENTS.contains(&name) {
-                return;
-            }
-            if KEEP_ELEMENTS.contains(&name) {
-                if VOID_ELEMENTS.contains(&name) {
-                    out.push_str(&format!("<{name}/>"));
-                    return;
-                }
-                out.push_str(&format!("<{name}>"));
-                for child in node.children() {
-                    sanitize_node(child, out);
-                }
-                out.push_str(&format!("</{name}>"));
-                return;
-            }
-            // Unknown/inline wrapper (div, span, a, section, …): unwrap.
-            for child in node.children() {
-                sanitize_node(child, out);
-            }
-        }
-        // Comments, doctypes, fragments: recurse into children only.
-        _ => {
-            for child in node.children() {
-                sanitize_node(child, out);
-            }
-        }
-    }
-}
-
-/// Removes paragraphs that contain only whitespace — a frequent artifact of
-/// unwrapping ad/share containers.
-fn collapse_blank_paragraphs(xhtml: &str) -> String {
-    let mut result = xhtml.to_string();
-    loop {
-        let collapsed = result.replace("<p> </p>", "").replace("<p></p>", "");
-        if collapsed == result {
-            return result;
-        }
-        result = collapsed;
-    }
-}
-
 /// Heuristic: does a link's text look like a chapter entry?
 ///
 /// Implemented by hand because the project intentionally avoids a regex
@@ -788,6 +896,15 @@ pub fn looks_like_chapter_text(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn bounded_reader_stops_one_byte_after_the_limit() {
+        let body = vec![b'x'; 64];
+
+        assert_eq!(read_limited(Cursor::new(&body), 64).unwrap().len(), 64);
+        assert_eq!(read_limited(Cursor::new(&body), 16).unwrap().len(), 17);
+    }
 
     #[test]
     fn host_extraction() {
@@ -800,6 +917,45 @@ mod tests {
             Some("example.com".to_string())
         );
         assert_eq!(host_of("not a url"), None);
+    }
+
+    #[test]
+    fn network_guard_rejects_local_private_and_non_web_targets() {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "http://localhost/admin",
+            "http://service.internal/",
+            "http://127.0.0.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/",
+            "http://172.16.0.1/",
+            "http://192.168.1.1/",
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "https://user:secret@example.com/",
+        ] {
+            let parsed = reqwest::Url::parse(url).expect("test URL should parse");
+            assert!(
+                validate_parsed_remote_url(&parsed, false).is_err(),
+                "unsafe target was accepted: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_guard_accepts_public_http_addresses() {
+        for url in [
+            "https://example.com/book/1",
+            "http://93.184.216.34/chapter/2",
+            "https://[2606:4700:4700::1111]/",
+        ] {
+            let parsed = reqwest::Url::parse(url).expect("test URL should parse");
+            assert!(
+                validate_parsed_remote_url(&parsed, false).is_ok(),
+                "public target was rejected: {url}"
+            );
+        }
     }
 
     #[test]
@@ -905,6 +1061,45 @@ mod tests {
             detect_source("https://www.novelupdates.com/series/x/").id(),
             "novelupdates"
         );
+        assert_eq!(
+            detect_source("https://novelphoenix.com/novel/x").id(),
+            "novelphoenix"
+        );
+        assert_eq!(
+            detect_source("https://freewebnovel.com/book/x").id(),
+            "generic"
+        );
+        assert_eq!(
+            detect_source("https://lightnovelpub.me/book/x").id(),
+            "lightnovelpub"
+        );
+        assert_eq!(
+            detect_source("https://chikari.moe/novels/x").id(),
+            "chikari"
+        );
+        assert_eq!(
+            detect_source("https://novelfire.net/book/x").id(),
+            "novelfire"
+        );
+        assert_eq!(
+            detect_source("https://novelarrow.com/novel/x").id(),
+            "novelarrow"
+        );
         assert_eq!(detect_source("https://random-site.org/n/1").id(), "generic");
+    }
+
+    #[test]
+    fn browser_routing_covers_challenged_sources_but_rejects_lookalikes() {
+        for host in [
+            "novelupdates.com",
+            "novellunar.com",
+            "novelarrow.com",
+            "freewebnovel.com",
+            "lightnovelpub.me",
+            "novelfire.net",
+        ] {
+            assert!(is_webview_routed(&format!("https://www.{host}/book/x")));
+            assert!(!is_webview_routed(&format!("https://not{host}/book/x")));
+        }
     }
 }
