@@ -322,7 +322,11 @@ fn webnovel_sessions_path() -> Option<PathBuf> {
 /// directory. It is read only for the one-time, forward migration below.
 fn legacy_webnovel_sessions_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".fero").join("webnovel_sessions.json"))
+    Some(
+        PathBuf::from(home)
+            .join(".fero")
+            .join("webnovel_sessions.json"),
+    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -335,9 +339,7 @@ struct StoredSession {
 fn load_stored_sessions() -> Vec<StoredSession> {
     webnovel_sessions_path()
         .and_then(|path| fs::read_to_string(path).ok())
-        .or_else(|| {
-            legacy_webnovel_sessions_path().and_then(|path| fs::read_to_string(path).ok())
-        })
+        .or_else(|| legacy_webnovel_sessions_path().and_then(|path| fs::read_to_string(path).ok()))
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
 }

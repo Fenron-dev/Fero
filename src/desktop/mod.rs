@@ -1655,8 +1655,14 @@ mod tests {
         fs::write(destination.join("settings.json"), "destination").unwrap();
 
         assert_eq!(copy_data_directory(&source, &destination).unwrap(), 1);
-        assert_eq!(fs::read_to_string(source.join("settings.json")).unwrap(), "settings");
-        assert_eq!(fs::read_to_string(destination.join("settings.json")).unwrap(), "destination");
+        assert_eq!(
+            fs::read_to_string(source.join("settings.json")).unwrap(),
+            "settings"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("settings.json")).unwrap(),
+            "destination"
+        );
         assert_eq!(
             fs::read_to_string(destination.join("subscriptions/one.json")).unwrap(),
             "source"
