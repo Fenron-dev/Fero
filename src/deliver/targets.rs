@@ -298,7 +298,7 @@ fn load_pointer() -> Option<PathBuf> {
 /// - [`FeroError::InvalidTarget`] if the directory cannot be written to
 /// - [`FeroError::Io`] if the pointer file cannot be stored
 pub fn set_data_dir(dir: &Path) -> Result<()> {
-    is_usable(dir).map_err(FeroError::InvalidTarget)?;
+    validate_data_dir(dir)?;
     let path = pointer_path()
         .ok_or_else(|| FeroError::Io("Kein Home-Verzeichnis gefunden.".to_string()))?;
     if let Some(parent) = path.parent() {
@@ -316,6 +316,13 @@ pub fn set_data_dir(dir: &Path) -> Result<()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cached = Some(DataDir::Chosen(dir.to_path_buf()));
     Ok(())
+}
+
+/// Verifies that `dir` can become Fero's data directory without changing the
+/// saved location. Callers that need to copy state first use this so a failed
+/// copy never leaves the pointer aimed at a half-prepared directory.
+pub fn validate_data_dir(dir: &Path) -> Result<()> {
+    is_usable(dir).map_err(FeroError::InvalidTarget)
 }
 
 /// Warns when Gatekeeper launched the app from a randomized translocation.

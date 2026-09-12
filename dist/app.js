@@ -179,6 +179,31 @@ function confirmAction(message, confirmLabel) {
   });
 }
 
+/** Chooses what happens to Fero's own state after a data-directory change.
+ * Copying is deliberately non-destructive: the old directory is a recovery
+ * copy until the user has verified the new location. */
+function chooseDataDirectoryMigration(from, to) {
+  return new Promise((resolve) => {
+    const overlay = el("div", "confirm-overlay");
+    const box = el("div", "confirm-box");
+    box.appendChild(el("p", "confirm-text", "Fero-Daten übernehmen?\n\n" +
+      "Abos, Einstellungen, Sitzungen und der Zwischenstand können zum neuen Ordner kopiert werden. Der bisherige Ordner bleibt unverändert als Sicherheitskopie erhalten.\n\n" +
+      `Bisher: ${from}\nNeu: ${to}`));
+    const row = el("div", "row wrap");
+    const copy = el("button", "action primary", "Übernehmen");
+    const skip = el("button", "action", "Ohne Daten wechseln");
+    const cancel = el("button", "action ghost", "Abbrechen");
+    row.append(copy, skip, cancel); box.appendChild(row); overlay.appendChild(box);
+    const close = (choice) => { overlay.remove(); resolve(choice); };
+    copy.addEventListener("click", () => close("copy"));
+    skip.addEventListener("click", () => close("skip"));
+    cancel.addEventListener("click", () => close(null));
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) close(null); });
+    document.body.appendChild(overlay);
+    copy.focus();
+  });
+}
+
 // ── Navigation ───────────────────────────────────────────────────────────
 
 function showView(name) {
@@ -1595,11 +1620,20 @@ $("data-dir-pick").addEventListener("click", async () => {
   try {
     const directory = await pickFolder();
     if (!directory) return;
-    await post("data-dir/save", { directory });
+    const choice = dataDir && dataDir !== directory
+      ? await chooseDataDirectoryMigration(dataDir, directory)
+      : "skip";
+    if (!choice) return;
+    const result = await post("data-dir/save", {
+      directory,
+      copyExisting: choice === "copy",
+    });
     await loadTargets();
     setFeedback(
       $("data-dir-feedback"),
-      "Datenordner gesetzt. Abos und Einstellungen liegen jetzt dort.",
+      choice === "copy"
+        ? `Datenordner gesetzt. ${result.copiedEntries || 0} Einträge übernommen; der alte Ordner bleibt erhalten.`
+        : "Datenordner gesetzt. Bestehende Daten bleiben im bisherigen Ordner.",
       "ok"
     );
   } catch (error) {

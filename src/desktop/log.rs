@@ -57,10 +57,11 @@ pub(super) fn build_open_debug_log_response() -> SimpleResponse {
     }
 }
 
-/// Debug-log path (`~/.fero/webnovel_debug.log`).
+/// Debug-log path inside Fero's selected data directory.
 pub(super) fn debug_log_path() -> Option<PathBuf> {
-    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".fero").join("webnovel_debug.log"))
+    resolve_data_dir()
+        .path()
+        .map(|directory| directory.join("webnovel_debug.log"))
 }
 
 /// Size at which the debug log is rotated to `<name>.1`.

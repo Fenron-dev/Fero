@@ -929,6 +929,9 @@ struct TargetsResponse {
     fallback: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// Number of state files copied from the previous data directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copied_entries: Option<usize>,
 }
 
 fn build_targets_response() -> TargetsResponse {
@@ -959,6 +962,7 @@ fn build_targets_response() -> TargetsResponse {
             .collect(),
         fallback: settings.fallback.clone(),
         error: None,
+        copied_entries: None,
     }
 }
 
@@ -1266,6 +1270,10 @@ fn build_relocate_response(body: &[u8]) -> SimpleResponse {
 #[serde(rename_all = "camelCase")]
 struct SetDataDirRequest {
     directory: String,
+    /// When true, subscriptions, target settings, caches and sessions are
+    /// copied into the new data directory before it becomes active.
+    #[serde(default)]
+    copy_existing: bool,
 }
 
 /// Sets the data directory to a folder the user picked.
@@ -1284,13 +1292,96 @@ fn build_set_data_dir_response(body: &[u8]) -> TargetsResponse {
             }
         }
     };
-    match crate::deliver::targets::set_data_dir(Path::new(&req.directory)) {
-        Ok(()) => build_targets_response(),
+    let destination = Path::new(&req.directory);
+    if let Err(error) = crate::deliver::targets::validate_data_dir(destination) {
+        return TargetsResponse {
+            error: Some(error.to_string()),
+            ..build_targets_response()
+        };
+    }
+
+    let copied_entries = if req.copy_existing {
+        let previous = resolve_data_dir().path().map(Path::to_path_buf);
+        match previous {
+            Some(source) => match copy_data_directory(&source, destination) {
+                Ok(entries) => Some(entries),
+                Err(error) => {
+                    return TargetsResponse {
+                        error: Some(error.to_string()),
+                        ..build_targets_response()
+                    }
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    match crate::deliver::targets::set_data_dir(destination) {
+        Ok(()) => {
+            let mut response = build_targets_response();
+            response.copied_entries = copied_entries;
+            response
+        }
         Err(error) => TargetsResponse {
             error: Some(error.to_string()),
             ..build_targets_response()
         },
     }
+}
+
+/// Copies Fero's state into a new data directory without touching the old
+/// one. Existing destination files win, so choosing a previously used Fero
+/// folder cannot silently overwrite newer subscriptions or settings.
+fn copy_data_directory(source: &Path, destination: &Path) -> Result<usize> {
+    let source = fs::canonicalize(source).map_err(FeroError::from)?;
+    let destination = fs::canonicalize(destination).map_err(FeroError::from)?;
+    if source == destination {
+        return Ok(0);
+    }
+    if destination.starts_with(&source) || source.starts_with(&destination) {
+        return Err(FeroError::InvalidTarget(
+            "Der neue Datenordner darf nicht innerhalb des bisherigen Ordners liegen (und umgekehrt)."
+                .to_string(),
+        ));
+    }
+    let copied = copy_directory_entries(&source, &destination)?;
+    // The copied store can include login cookies. Keep the selected Fero
+    // directory private just like the legacy ~/.fero store was.
+    restrict_to_owner(&destination, true);
+    restrict_to_owner(&destination.join("webnovel_sessions.json"), false);
+    Ok(copied)
+}
+
+fn copy_directory_entries(source: &Path, destination: &Path) -> Result<usize> {
+    let mut copied = 0;
+    for entry in fs::read_dir(source).map_err(FeroError::from)? {
+        let entry = entry.map_err(FeroError::from)?;
+        let file_type = entry.file_type().map_err(FeroError::from)?;
+        // A symlink can point outside Fero's state folder. State never needs
+        // one, so skipping it avoids copying arbitrary user files.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            if target.exists() && !target.is_dir() {
+                return Err(FeroError::InvalidTarget(format!(
+                    "Kann Datenordner nicht zusammenführen: {} ist keine Mappe.",
+                    target.display()
+                )));
+            }
+            if !target.exists() {
+                fs::create_dir_all(&target).map_err(FeroError::from)?;
+            }
+            copied += copy_directory_entries(&entry.path(), &target)?;
+        } else if file_type.is_file() && !target.exists() {
+            fs::copy(entry.path(), target).map_err(FeroError::from)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
 }
 
 #[derive(Deserialize)]
@@ -1546,5 +1637,31 @@ mod tests {
         assert_eq!(safe_folder_segment("..", "Fallback"), "Fallback");
         assert_eq!(safe_folder_segment("", "Fallback"), "Fallback");
         assert_eq!(safe_folder_segment("Titel", "Fallback"), "Titel");
+    }
+
+    #[test]
+    fn copying_data_directory_keeps_source_and_existing_destination_files() {
+        let root = std::env::temp_dir().join(format!(
+            "fero-data-copy-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("subscriptions")).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(source.join("subscriptions/one.json"), "source").unwrap();
+        fs::write(source.join("settings.json"), "settings").unwrap();
+        fs::write(destination.join("settings.json"), "destination").unwrap();
+
+        assert_eq!(copy_data_directory(&source, &destination).unwrap(), 1);
+        assert_eq!(fs::read_to_string(source.join("settings.json")).unwrap(), "settings");
+        assert_eq!(fs::read_to_string(destination.join("settings.json")).unwrap(), "destination");
+        assert_eq!(
+            fs::read_to_string(destination.join("subscriptions/one.json")).unwrap(),
+            "source"
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

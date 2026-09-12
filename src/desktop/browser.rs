@@ -313,9 +313,16 @@ fn is_login_cookie(name: &str) -> bool {
     lower.contains("logged_in") || lower == "sessionid" || lower.starts_with("wordpress_sec")
 }
 
-/// Path of the persisted session store (`~/.fero/webnovel_sessions.json`).
+/// Path of the persisted session store in Fero's selected data directory.
 fn webnovel_sessions_path() -> Option<PathBuf> {
     debug_log_path().and_then(|p| p.parent().map(|dir| dir.join("webnovel_sessions.json")))
+}
+
+/// Location used by releases before sessions belonged to the selected data
+/// directory. It is read only for the one-time, forward migration below.
+fn legacy_webnovel_sessions_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".fero").join("webnovel_sessions.json"))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -328,6 +335,9 @@ struct StoredSession {
 fn load_stored_sessions() -> Vec<StoredSession> {
     webnovel_sessions_path()
         .and_then(|path| fs::read_to_string(path).ok())
+        .or_else(|| {
+            legacy_webnovel_sessions_path().and_then(|path| fs::read_to_string(path).ok())
+        })
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
 }
@@ -373,7 +383,14 @@ pub(super) fn restore_webnovel_sessions() {
         }
     }
 
-    for entry in load_stored_sessions() {
+    let sessions = load_stored_sessions();
+    // An upgrade from a pre-data-directory release may still have its login
+    // cookies under ~/.fero. Persist the loaded copy at the new location once,
+    // so all later data-directory moves can carry it along with the rest.
+    if webnovel_sessions_path().is_some_and(|path| !path.exists()) && !sessions.is_empty() {
+        write_stored_sessions(&sessions);
+    }
+    for entry in sessions {
         set_browser_session(
             &entry.host,
             BrowserSession {
