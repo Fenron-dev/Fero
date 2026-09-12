@@ -1088,6 +1088,8 @@ struct WebnovelStopRequest {
 #[serde(rename_all = "camelCase")]
 pub(super) struct WebnovelJobResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<WebnovelJobStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -1095,36 +1097,50 @@ pub(super) struct WebnovelJobResponse {
 
 pub(super) fn build_webnovel_job_response(query: Option<&str>) -> WebnovelJobResponse {
     let job_id = query.and_then(|q| extract_query_value(q, "job_id"));
-    let Some(job_id) = job_id else {
-        return WebnovelJobResponse {
-            status: None,
-            error: Some("missing job_id".to_string()),
-        };
-    };
-
     let Ok(mut jobs) = WEBNOVEL_JOBS.lock() else {
         return WebnovelJobResponse {
+            job_id: None,
             status: None,
             error: Some("job registry unavailable".to_string()),
         };
     };
 
-    match jobs.get(&job_id).cloned() {
-        Some(status) => {
-            // Terminal jobs are handed out once and then evicted.
-            if status.state != "running" {
-                jobs.remove(&job_id);
+    if let Some(job_id) = job_id {
+        return match jobs.get(&job_id).cloned() {
+            Some(status) => {
+                // Terminal jobs are handed out once and then evicted.
+                if status.state != "running" {
+                    jobs.remove(&job_id);
+                }
+                WebnovelJobResponse {
+                    job_id: Some(job_id),
+                    status: Some(status),
+                    error: None,
+                }
             }
-            WebnovelJobResponse {
-                status: Some(status),
-                error: None,
-            }
-        }
-        None => WebnovelJobResponse {
-            status: None,
-            error: Some("Job nicht gefunden.".to_string()),
-        },
+            None => WebnovelJobResponse {
+                job_id: None,
+                status: None,
+                error: Some("Job nicht gefunden.".to_string()),
+            },
+        };
     }
+
+    // No id means "show an automatically started job, if one exists". This
+    // lets the window reconnect to a tray/timer run after it was hidden or
+    // reopened, without exposing terminal jobs as if they were still active.
+    jobs.iter()
+        .find(|(_, status)| status.state == "running")
+        .map(|(job_id, status)| WebnovelJobResponse {
+            job_id: Some(job_id.clone()),
+            status: Some(status.clone()),
+            error: None,
+        })
+        .unwrap_or(WebnovelJobResponse {
+            job_id: None,
+            status: None,
+            error: None,
+        })
 }
 
 /// Runs one check job over the selected subscriptions.

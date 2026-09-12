@@ -1134,6 +1134,8 @@ struct StopRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MangaJobResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<MangaJobStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -1141,35 +1143,50 @@ pub(crate) struct MangaJobResponse {
 
 /// Returns the progress of a check job; terminal jobs are handed out once.
 pub(crate) fn build_job_response(query: Option<&str>) -> MangaJobResponse {
-    let Some(job_id) = query.and_then(|q| extract_query_value(q, "job_id")) else {
-        return MangaJobResponse {
-            status: None,
-            error: Some("missing job_id".to_string()),
-        };
-    };
-
     let Ok(mut jobs) = MANGA_JOBS.lock() else {
         return MangaJobResponse {
+            job_id: None,
             status: None,
             error: Some("job registry unavailable".to_string()),
         };
     };
 
-    match jobs.get(&job_id).cloned() {
-        Some(status) => {
-            if status.state != "running" {
-                jobs.remove(&job_id);
+    let job_id = query.and_then(|q| extract_query_value(q, "job_id"));
+    if let Some(job_id) = job_id {
+        return match jobs.get(&job_id).cloned() {
+            Some(status) => {
+                if status.state != "running" {
+                    jobs.remove(&job_id);
+                }
+                MangaJobResponse {
+                    job_id: Some(job_id),
+                    status: Some(status),
+                    error: None,
+                }
             }
-            MangaJobResponse {
-                status: Some(status),
-                error: None,
-            }
-        }
-        None => MangaJobResponse {
-            status: None,
-            error: Some("Job nicht gefunden.".to_string()),
-        },
+            None => MangaJobResponse {
+                job_id: None,
+                status: None,
+                error: Some("Job nicht gefunden.".to_string()),
+            },
+        };
     }
+
+    // With no id the frontend asks whether the tray/timer started a run while
+    // the window was hidden. Return only a running job so reopening the app
+    // can show and stop it immediately.
+    jobs.iter()
+        .find(|(_, status)| status.state == "running")
+        .map(|(job_id, status)| MangaJobResponse {
+            job_id: Some(job_id.clone()),
+            status: Some(status.clone()),
+            error: None,
+        })
+        .unwrap_or(MangaJobResponse {
+            job_id: None,
+            status: None,
+            error: None,
+        })
 }
 
 // ---------------------------------------------------------------------------

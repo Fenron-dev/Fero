@@ -1515,6 +1515,9 @@ $("check-all").addEventListener("click", () => startCheck(null, null));
 
 /* Der gerade laufende Job, damit der Stopp-Knopf weiss, wen er meint. */
 let activeJob = null;
+let backgroundJobTimer = null;
+let backgroundPollInFlight = false;
+const backgroundJobs = new Map();
 
 const ENGINE_LABELS = { webnovel: "Webnovels", manga: "Manga" };
 
@@ -1581,21 +1584,7 @@ function runJob(kind, jobId) {
       const job = data.status;
       if (!job) return;
 
-      $("job-title").textContent =
-        job.novelTitle || job.mangaTitle || job.seriesTitle || "Prüfe …";
-      $("job-detail").textContent = job.totalChapters
-        ? `Kapitel ${job.currentChapter} von ${job.totalChapters} · ${job.downloaded} geladen`
-        : `${job.downloaded} geladen`;
-      const share = job.totalChapters
-        ? Math.round((job.currentChapter / job.totalChapters) * 100)
-        : 0;
-      $("job-bar-fill").style.width = `${Math.min(share, 100)}%`;
-      // Zwischen zwei Kapiteln koennen Dutzende Bildabrufe liegen; ohne diese
-      // Rueckmeldung sieht der Klick aus, als waere nichts passiert.
-      if (job.cancelRequested) {
-        stop.disabled = true;
-        stop.textContent = "wird beendet …";
-      }
+      renderJobBanner([{ kind, jobId, status: job }]);
 
       if (job.state !== "running") {
         if (job.state === "failed") status(job.message || "Lauf fehlgeschlagen.", true);
@@ -1611,13 +1600,82 @@ function runJob(kind, jobId) {
   });
 }
 
+function jobTitle(job) {
+  return job.novelTitle || job.mangaTitle || job.seriesTitle || "Prüfe …";
+}
+
+function jobDetail(kind, job, multiple) {
+  const prefix = multiple ? `${ENGINE_LABELS[kind]}: ` : "";
+  const progress = job.totalChapters
+    ? `Kapitel ${job.currentChapter} von ${job.totalChapters} · ${job.downloaded} geladen`
+    : `${job.downloaded} geladen`;
+  const pages = job.totalPages
+    ? ` · Seite ${job.currentPage} von ${job.totalPages}`
+    : "";
+  // The current chapter is set before fetching starts, so 63/63 means the
+  // last chapter is in flight, not that the complete job is already done.
+  const finishing = job.state === "running" && job.totalChapters &&
+    job.currentChapter >= job.totalChapters;
+  return prefix + progress + pages + (finishing ? " · Abschluss wird gespeichert …" : "");
+}
+
+function renderJobBanner(jobs) {
+  const banner = $("job-banner");
+  if (!jobs.length) {
+    banner.hidden = true;
+    return;
+  }
+  const primary = jobs[0];
+  const multiple = jobs.length > 1;
+  banner.hidden = false;
+  $("job-title").textContent = (multiple ? `${ENGINE_LABELS[primary.kind]}: ` : "") + jobTitle(primary.status);
+  $("job-detail").textContent = jobs
+    .map((entry) => jobDetail(entry.kind, entry.status, multiple))
+    .join(" · ");
+  const rawShare = primary.status.totalChapters
+    ? Math.round((primary.status.currentChapter / primary.status.totalChapters) * 100)
+    : 0;
+  // Never present a running job as complete while its final chapter is still
+  // being fetched or its archive is being written.
+  const share = primary.status.state === "running" && rawShare >= 100 ? 99 : rawShare;
+  $("job-bar-fill").style.width = `${Math.min(share, 100)}%`;
+  const stop = $("job-stop");
+  const cancelling = jobs.every((entry) => entry.status.cancelRequested);
+  stop.disabled = cancelling;
+  stop.textContent = cancelling ? "wird beendet …" : "Stoppen";
+}
+
+async function pollBackgroundJobs() {
+  if (activeJob || backgroundPollInFlight) return;
+  backgroundPollInFlight = true;
+  try {
+    const found = await Promise.all(["webnovel", "manga"].map(async (kind) => {
+      try {
+        const data = await api(`${kind}/job`);
+        if (!data.jobId || !data.status || data.status.state !== "running") return null;
+        return { kind, jobId: data.jobId, status: data.status };
+      } catch (error) {
+        // A running tray job may not exist yet during startup. Do not replace
+        // a visible banner with a transient polling error.
+        return null;
+      }
+    }));
+    backgroundJobs.clear();
+    for (const entry of found.filter(Boolean)) backgroundJobs.set(entry.kind, entry);
+    if (!activeJob) renderJobBanner([...backgroundJobs.values()]);
+  } finally {
+    backgroundPollInFlight = false;
+  }
+}
+
 $("job-stop").addEventListener("click", async () => {
-  if (!activeJob) return;
+  const jobs = activeJob ? [activeJob] : [...backgroundJobs.values()];
+  if (!jobs.length) return;
   const stop = $("job-stop");
   stop.disabled = true;
   stop.textContent = "wird beendet …";
   try {
-    await post(`${activeJob.kind}/stop`, { jobId: activeJob.jobId });
+    await Promise.all(jobs.map((job) => post(`${job.kind}/stop`, { jobId: job.jobId })));
   } catch (error) {
     status(error.message, true);
     stop.disabled = false;
@@ -2000,6 +2058,8 @@ $("log-open").addEventListener("click", async () => {
 
 (async function start() {
   showSourceKind("webnovel");
+  pollBackgroundJobs();
+  backgroundJobTimer = setInterval(pollBackgroundJobs, 900);
   $("view-list").classList.toggle("is-active", viewMode === "list");
   $("view-grid").classList.toggle("is-active", viewMode === "grid");
   // Zuerst die Ziele: sie liefern die Medientypen, aus denen sich die
