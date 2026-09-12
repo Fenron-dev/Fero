@@ -1352,7 +1352,10 @@ fn check_one_subscription(
     if (replace_metadata && info.cover_url.is_some()) || subscription.cover_url.is_none() {
         subscription.cover_url = info.cover_url.clone();
     }
-    if matches!(options.metadata_mode, MetadataMode::Add | MetadataMode::Replace) {
+    if matches!(
+        options.metadata_mode,
+        MetadataMode::Add | MetadataMode::Replace
+    ) {
         merge_labels(
             &mut subscription.genres,
             info.genres.clone(),

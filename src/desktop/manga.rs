@@ -585,11 +585,14 @@ fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo, mode: Me
     if (mode == MetadataMode::Replace && info.artist.is_some()) || subscription.artist.is_none() {
         subscription.artist = info.artist.clone();
     }
-    if (mode == MetadataMode::Replace && info.description.is_some()) || subscription.description.is_none()
+    if (mode == MetadataMode::Replace && info.description.is_some())
+        || subscription.description.is_none()
     {
         subscription.description = info.description.clone();
     }
-    if (mode == MetadataMode::Replace && info.cover_url.is_some()) || subscription.cover_url.is_none() {
+    if (mode == MetadataMode::Replace && info.cover_url.is_some())
+        || subscription.cover_url.is_none()
+    {
         subscription.cover_url = info.cover_url.clone();
     }
     if mode == MetadataMode::Replace || mode == MetadataMode::Add {
