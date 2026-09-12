@@ -43,38 +43,39 @@ const DEFAULT_TABLE_COLUMNS = ["title", "type", "source", "author", "genres", "s
 let tableColumns = JSON.parse(localStorage.getItem("fero.tableColumns") || "null") || DEFAULT_TABLE_COLUMNS;
 let tableSort = { key: null, direction: 1 };
 
-/* Sichtbarer Katalog der implementierten Adapter. Einträge werden wie alle
- * fremden Texte ausschließlich als Textknoten gerendert; hier entstehen keine
- * anklickbaren Remote-Links und damit auch keine zusätzliche WebView-Fläche. */
+/* Sichtbarer Katalog der implementierten Adapter. Fremde Texte werden wie
+ * bisher ausschließlich als Textknoten gerendert; das Öffnen eines Links läuft
+ * ausdrücklich über den geprüften Systembrowser-Endpunkt. */
 const SOURCE_CATALOG = {
   webnovel: {
     summary: "14 Einträge mit eigenen, gemeinsamen oder heuristischen Adaptern.",
     entries: [
-      { name: "Royal Road", hosts: "royalroad.com", note: "Eigener Adapter" },
-      { name: "Divine Dao Library", hosts: "divinedaolibrary.com", note: "WordPress-Adapter" },
-      { name: "NovelFull", hosts: "novelfull.com · novelfull.net · novgo.net · readnovelfull.com", note: "Gemeinsamer NovelFull-Adapter" },
-      { name: "Novelight", hosts: "novelight.net", note: "Eigener Adapter (Best Effort)" },
-      { name: "Novel Phoenix", hosts: "novelphoenix.com", note: "Eigener Adapter" },
-      { name: "NovelUpdates", hosts: "novelupdates.com", note: "Browserfenster und ggf. Anmeldung" },
-      { name: "WTR-Lab", hosts: "wtr-lab.com", note: "Eigener API-Adapter" },
-      { name: "FreeWebNovel", hosts: "freewebnovel.com", note: "Browserfenster · heuristischer Adapter" },
-      { name: "LightNovelPub", hosts: "lightnovelpub.me", note: "Browserfenster · eigener Adapter" },
-      { name: "Chikari", hosts: "chikari.moe", note: "Eigener API-Adapter" },
-      { name: "NovelFire", hosts: "novelfire.net", note: "Browserfenster · eigener Adapter" },
-      { name: "NovelArrow", hosts: "novelarrow.com", note: "Browserfenster · eigener Adapter" },
-      { name: "NovelLunar", hosts: "novellunar.com", note: "Browserfenster · heuristischer Adapter" },
-      { name: "Weitere HTML-Seiten", hosts: "beliebige öffentliche HTTP(S)-Quelle", note: "Heuristischer Adapter; Seitenaufbau muss erkennbar sein" },
+      { name: "Royal Road", hosts: "royalroad.com", url: "https://www.royalroad.com", note: "Eigener Adapter" },
+      { name: "Divine Dao Library", hosts: "divinedaolibrary.com", url: "https://www.divinedaolibrary.com", note: "WordPress-Adapter" },
+      { name: "NovelFull", hosts: "novelfull.com · novelfull.net · novgo.net · readnovelfull.com", url: "https://novelfull.com", note: "Gemeinsamer NovelFull-Adapter" },
+      { name: "Novelight", hosts: "novelight.net", url: "https://novelight.net", note: "Eigener Adapter (Best Effort)" },
+      { name: "Novel Phoenix", hosts: "novelphoenix.com", url: "https://novelphoenix.com", note: "Eigener Adapter" },
+      { name: "NovelUpdates", hosts: "novelupdates.com", url: "https://www.novelupdates.com", note: "Browserfenster und ggf. Anmeldung" },
+      { name: "WTR-Lab", hosts: "wtr-lab.com", url: "https://wtr-lab.com", note: "Eigener API-Adapter" },
+      { name: "FreeWebNovel", hosts: "freewebnovel.com", url: "https://freewebnovel.com", note: "Browserfenster · heuristischer Adapter" },
+      { name: "LightNovelPub", hosts: "lightnovelpub.me", url: "https://lightnovelpub.me", note: "Browserfenster · eigener Adapter" },
+      { name: "Chikari", hosts: "chikari.moe", url: "https://chikari.moe", note: "Eigener API-Adapter" },
+      { name: "NovelFire", hosts: "novelfire.net", url: "https://novelfire.net", note: "Browserfenster · eigener Adapter" },
+      { name: "NovelArrow", hosts: "novelarrow.com", url: "https://novelarrow.com", note: "Browserfenster · eigener Adapter" },
+      { name: "NovelLunar", hosts: "novellunar.com", url: "https://novellunar.com", note: "Browserfenster · heuristischer Adapter" },
+      { name: "Weitere HTML-Seiten", hosts: "beliebige öffentliche HTTP(S)-Quelle", url: "", note: "Heuristischer Adapter; Seitenaufbau muss erkennbar sein" },
     ],
   },
   manga: {
-    summary: "6 Einträge mit fest zugeordneten Manga- und Webtoon-Adaptern.",
+    summary: "7 Einträge mit fest zugeordneten Manga- und Webtoon-Adaptern.",
     entries: [
-      { name: "MangaTown", hosts: "mangatown.com", note: "Eigener Adapter" },
-      { name: "FanFox", hosts: "fanfox.net · mangafox.la", note: "Gemeinsamer FanFox-Adapter" },
-      { name: "Webtoons", hosts: "webtoons.com", note: "Eigener Webtoon-Adapter" },
-      { name: "MangaRead", hosts: "mangaread.org", note: "Madara-Adapter" },
-      { name: "ManhuaPlus", hosts: "manhuaplus.com", note: "Madara-Adapter" },
-      { name: "Hentai20", hosts: "hentai20.io", note: "Themesia-Adapter" },
+      { name: "MangaTown", hosts: "mangatown.com", url: "https://mangatown.com", note: "Eigener Adapter" },
+      { name: "FanFox", hosts: "fanfox.net · mangafox.la", url: "https://fanfox.net", note: "Gemeinsamer FanFox-Adapter" },
+      { name: "Webtoons", hosts: "webtoons.com", url: "https://www.webtoons.com", note: "Eigener Webtoon-Adapter" },
+      { name: "MangaRead", hosts: "mangaread.org", url: "https://mangaread.org", note: "Madara-Adapter" },
+      { name: "ManhuaPlus", hosts: "manhuaplus.com", url: "https://manhuaplus.com", note: "Madara-Adapter" },
+      { name: "Hentai20", hosts: "hentai20.io", url: "https://hentai20.io", note: "Themesia-Adapter" },
+      { name: "Chikari", hosts: "chikari.moe", url: "https://chikari.moe", note: "Eigener API-Adapter für Manga, Manhwa und Manhua" },
     ],
   },
   podcast: {
@@ -82,6 +83,14 @@ const SOURCE_CATALOG = {
     entries: [],
   },
 };
+
+const SOURCE_TABLE_COLUMNS = [
+  ["name", "Name"], ["hosts", "Hosts"], ["url", "Link"],
+  ["note", "Adapter / Hinweis"], ["actions", "Aktionen"],
+];
+const DEFAULT_SOURCE_TABLE_COLUMNS = ["name", "hosts", "url", "note", "actions"];
+let sourceTableColumns = JSON.parse(localStorage.getItem("fero.sourceTableColumns") || "null") || DEFAULT_SOURCE_TABLE_COLUMNS;
+let sourceTableSort = { key: null, direction: 1 };
 
 // ── Kleinkram ────────────────────────────────────────────────────────────
 
@@ -234,12 +243,138 @@ function showSourceKind(kind) {
     return;
   }
 
-  for (const source of catalog.entries) {
-    const entry = el("article", "source-entry");
-    entry.appendChild(el("div", "source-entry-title", source.name));
-    entry.appendChild(el("div", "source-entry-hosts", source.hosts));
-    entry.appendChild(el("div", "source-entry-note", source.note));
-    list.appendChild(entry);
+  renderSourceTable(catalog.entries, list);
+}
+
+function sourceTableValue(source, key) {
+  switch (key) {
+    case "name": return source.name;
+    case "hosts": return source.hosts;
+    case "url": return source.url || "—";
+    case "note": return source.note;
+    case "actions": return source.url ? "Öffnen · Kopieren" : "—";
+    default: return "—";
+  }
+}
+
+function renderSourceColumnMenu(anchor) {
+  document.querySelectorAll(".column-menu").forEach((node) => node.remove());
+  const menu = el("div", "column-menu");
+  for (const [key, label] of SOURCE_TABLE_COLUMNS) {
+    const row = el("label", "column-menu-item");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = sourceTableColumns.includes(key);
+    check.disabled = key === "name" || key === "actions";
+    check.addEventListener("change", () => {
+      sourceTableColumns = SOURCE_TABLE_COLUMNS
+        .map(([id]) => id)
+        .filter((id) => id === "name" || id === "actions" || (id === key ? check.checked : sourceTableColumns.includes(id)));
+      localStorage.setItem("fero.sourceTableColumns", JSON.stringify(sourceTableColumns));
+      menu.remove();
+      showSourceKind(document.querySelector(".source-tab.is-active")?.dataset.sourceKind || "webnovel");
+    });
+    row.append(check, document.createTextNode(label));
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.min(rect.left, window.innerWidth - 250)}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+  setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+}
+
+async function copyExternalText(value) {
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch (error) {
+    const field = el("textarea", "visually-hidden");
+    field.value = value;
+    document.body.appendChild(field);
+    field.select();
+    const copied = document.execCommand("copy");
+    field.remove();
+    if (!copied) throw error;
+  }
+  status("Link kopiert.");
+}
+
+function sourceActionButton(label, source, action) {
+  const button = el("button", "action", label);
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    if (!source.url) return;
+    try {
+      if (action === "open") await openExternal(source.url);
+      else await copyExternalText(source.url);
+    } catch (error) {
+      status(error.message || "Aktion fehlgeschlagen.", true);
+    }
+  });
+  return button;
+}
+
+function renderSourceTable(entries, list) {
+  const needle = $("source-filter").value.trim().toLowerCase();
+  const visible = entries.filter((source) => !needle ||
+    [source.name, source.hosts, source.url, source.note].some((value) => (value || "").toLowerCase().includes(needle)));
+  const table = el("table", "source-table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const columns = SOURCE_TABLE_COLUMNS.filter(([key]) => sourceTableColumns.includes(key));
+  for (const [key, label] of columns) {
+    const th = document.createElement("th");
+    const button = el("button", "table-sort", label);
+    if (sourceTableSort.key === key) button.textContent += sourceTableSort.direction === 1 ? " ↑" : " ↓";
+    button.addEventListener("click", () => {
+      sourceTableSort = { key, direction: sourceTableSort.key === key ? -sourceTableSort.direction : 1 };
+      showSourceKind(document.querySelector(".source-tab.is-active")?.dataset.sourceKind || "webnovel");
+    });
+    th.appendChild(button);
+    th.addEventListener("contextmenu", (event) => { event.preventDefault(); renderSourceColumnMenu(th); });
+    headRow.appendChild(th);
+  }
+  head.appendChild(headRow);
+  table.appendChild(head);
+
+  const body = document.createElement("tbody");
+  const sorted = [...visible];
+  if (sourceTableSort.key) {
+    sorted.sort((a, b) => sourceTableValue(a, sourceTableSort.key)
+      .localeCompare(sourceTableValue(b, sourceTableSort.key), "de", { numeric: true }) * sourceTableSort.direction);
+  }
+  for (const source of sorted) {
+    const row = document.createElement("tr");
+    for (const [key] of columns) {
+      const cell = document.createElement("td");
+      if (key === "name" && source.url) {
+        cell.appendChild(sourceActionButton(source.name, source, "open"));
+        cell.firstChild.classList.add("source-name");
+      } else if (key === "url" && source.url) {
+        cell.appendChild(sourceActionButton(source.url, source, "open"));
+        cell.firstChild.classList.add("source-url");
+      } else if (key === "actions") {
+        const actions = el("div", "source-actions");
+        if (source.url) {
+          actions.appendChild(sourceActionButton("Öffnen", source, "open"));
+          actions.appendChild(sourceActionButton("Kopieren", source, "copy"));
+        } else {
+          actions.appendChild(el("span", null, "—"));
+        }
+        cell.appendChild(actions);
+      } else {
+        cell.textContent = sourceTableValue(source, key);
+      }
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  }
+  table.appendChild(body);
+  if (!sorted.length) {
+    list.appendChild(el("div", "source-empty", "Keine Quellen für diesen Filter gefunden."));
+  } else {
+    list.appendChild(table);
   }
 }
 
@@ -253,6 +388,10 @@ document.querySelectorAll(".source-tab").forEach((tab) => {
     showSourceKind(next.dataset.sourceKind);
     next.focus();
   });
+});
+
+$("source-filter").addEventListener("input", () => {
+  showSourceKind(document.querySelector(".source-tab.is-active")?.dataset.sourceKind || "webnovel");
 });
 
 document.querySelectorAll(".nav-item").forEach((item) => {

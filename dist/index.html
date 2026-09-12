@@ -171,6 +171,15 @@
     <section class="view" data-view="sources">
       <header class="view-head">
         <h1>Quellen</h1>
+        <div class="head-actions">
+          <input
+            type="search"
+            id="source-filter"
+            class="input search"
+            placeholder="Quellen filtern"
+            aria-label="Quellen filtern"
+          />
+        </div>
       </header>
       <p class="hint">
         Seiten, für die Fero derzeit einen Downloadweg kennt. Einige Quellen
@@ -217,7 +226,7 @@
         aria-labelledby="source-tab-webnovel"
       >
         <div class="source-summary" id="source-summary"></div>
-        <div class="source-grid" id="source-list"></div>
+        <div class="table-wrap" id="source-list"></div>
       </div>
     </section>
 

@@ -30,6 +30,7 @@
 //! - `api::novel` – shared HTTP client and URL helpers
 
 pub mod fanfox;
+pub mod chikari;
 pub mod madara;
 pub mod mangatown;
 pub mod packed;
@@ -138,7 +139,8 @@ pub trait MangaSource {
 }
 
 /// Hosts with a manga adapter, for the user-facing error message.
-const SUPPORTED_HOSTS: [&str; 6] = [
+const SUPPORTED_HOSTS: [&str; 7] = [
+    "chikari.moe",
     "mangatown.com",
     "fanfox.net",
     "webtoons.com",
@@ -161,6 +163,8 @@ pub fn detect_source(url: &str) -> Option<Box<dyn MangaSource>> {
     let host = crate::api::novel::host_of(url).unwrap_or_default();
     if host.ends_with("mangatown.com") {
         Some(Box::new(mangatown::MangaTownSource))
+    } else if matches_host(&host, &["chikari.moe"]) {
+        Some(Box::new(chikari::ChikariSource))
     } else if host.ends_with("fanfox.net") || host.ends_with("mangafox.la") {
         // FanFox and its mangafox.la mirror serve identical markup.
         Some(Box::new(fanfox::FanFoxSource))
@@ -350,6 +354,11 @@ mod tests {
             detect_source("https://www.webtoons.com/en/action/gul/list?title_no=2617")
                 .map(|source| source.id()),
             Some("webtoons")
+        );
+        assert_eq!(
+            detect_source("https://chikari.moe/series/delicious-in-dungeon")
+                .map(|source| source.id()),
+            Some("chikari")
         );
         assert!(detect_source("https://example.com/manga/x").is_none());
     }

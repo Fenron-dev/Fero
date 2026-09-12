@@ -405,6 +405,95 @@ body {
   gap: 10px;
 }
 
+.source-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  background: var(--bg-raised);
+}
+
+.source-table th,
+.source-table td {
+  max-width: 360px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--bg-input);
+}
+
+.source-table td {
+  color: var(--text-dim);
+}
+
+.source-table td:first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.source-table tbody tr:hover {
+  background: #ffffff08;
+}
+
+.source-table .table-sort {
+  padding: 10px 12px;
+}
+
+.source-name,
+.source-url {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: #6aa9ff66;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.source-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.source-name:hover,
+.source-url:hover {
+  color: var(--text);
+}
+
+.source-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.source-actions .action {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.visually-hidden {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  opacity: 0;
+}
+
 .source-entry {
   min-width: 0;
   padding: 13px 14px;
