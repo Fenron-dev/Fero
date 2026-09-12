@@ -43,9 +43,8 @@ impl MangaSource for ChikariSource {
         let mut chapters = Vec::new();
         let mut offset = 0usize;
         for _ in 0..MAX_TOC_PAGES {
-            let list_url = format!(
-                "{API_ROOT}/{slug}/chapters?order=asc&limit={PAGE_SIZE}&offset={offset}"
-            );
+            let list_url =
+                format!("{API_ROOT}/{slug}/chapters?order=asc&limit={PAGE_SIZE}&offset={offset}");
             let (_final_url, body) = client.get_text(&list_url)?;
             let page: ChapterPage = parse_json(&body, "Kapitelliste", &list_url)?;
             let count = page.items.len();
@@ -213,7 +212,10 @@ fn series_slug(url: &str) -> Option<String> {
     if parts.next()? != "series" {
         return None;
     }
-    parts.next().filter(|slug| !slug.is_empty()).map(str::to_string)
+    parts
+        .next()
+        .filter(|slug| !slug.is_empty())
+        .map(str::to_string)
 }
 
 fn chapter_key(url: &str) -> Option<(String, String)> {
@@ -270,10 +272,9 @@ mod tests {
         assert_eq!(format_chapter_number(page.items[1].number), "12.5");
         assert_eq!(non_empty(page.items[0].volume.clone()), None);
 
-        let payload: ChapterPayload = serde_json::from_str(
-            r#"{"pages":["https://cdn.chikari.moe/series/1/ch/1/000.webp"]}"#,
-        )
-        .unwrap();
+        let payload: ChapterPayload =
+            serde_json::from_str(r#"{"pages":["https://cdn.chikari.moe/series/1/ch/1/000.webp"]}"#)
+                .unwrap();
         assert_eq!(payload.pages.len(), 1);
     }
 
@@ -285,9 +286,6 @@ mod tests {
         .unwrap();
         assert_eq!(completed_hint(detail.status.as_deref()), Some(true));
         assert!(detail.type_name.eq_ignore_ascii_case("manga"));
-        assert_eq!(
-            detail.tags.iter().filter(|tag| !tag.is_spoiler).count(),
-            1
-        );
+        assert_eq!(detail.tags.iter().filter(|tag| !tag.is_spoiler).count(), 1);
     }
 }

@@ -29,8 +29,8 @@
 //! - `scraper` – HTML parsing
 //! - `api::novel` – shared HTTP client and URL helpers
 
-pub mod fanfox;
 pub mod chikari;
+pub mod fanfox;
 pub mod madara;
 pub mod mangatown;
 pub mod packed;
