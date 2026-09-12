@@ -25,8 +25,23 @@ let mediaKinds = [];
 
 let subscriptions = [];
 let currentDetailId = null;
+let currentDetailKind = null;
 let jobTimer = null;
 let dataDir = null;
+const selectedSubscriptionKeys = new Set();
+let selectionMode = false;
+let longPressTimer = null;
+
+const TABLE_COLUMNS = [
+  ["title", "Titel"], ["type", "Typ"], ["source", "Quelle"],
+  ["author", "Autor"], ["genres", "Genres"], ["tags", "Tags"],
+  ["status", "Status"], ["progress", "Fortschritt"], ["release", "Neueste Veröffentlichung"],
+  ["checked", "Letzter Abgleich"], ["added", "Hinzugefügt"], ["target", "Ziel"],
+  ["delay", "Abstand"], ["limit", "Limit"], ["description", "Beschreibung"], ["error", "Letzter Fehler"],
+];
+const DEFAULT_TABLE_COLUMNS = ["title", "type", "source", "author", "genres", "status", "progress", "release", "checked"];
+let tableColumns = JSON.parse(localStorage.getItem("fero.tableColumns") || "null") || DEFAULT_TABLE_COLUMNS;
+let tableSort = { key: null, direction: 1 };
 
 /* Sichtbarer Katalog der implementierten Adapter. Einträge werden wie alle
  * fremden Texte ausschließlich als Textknoten gerendert; hier entstehen keine
@@ -232,6 +247,7 @@ document.querySelectorAll(".nav-item").forEach((item) => {
 
 $("detail-back").addEventListener("click", () => {
   currentDetailId = null;
+  currentDetailKind = null;
   showView("subscriptions");
 });
 
@@ -259,6 +275,12 @@ async function loadSubscriptions() {
       mediaKind: item.mediaKind || "manga",
     })),
   ].sort((a, b) => a.title.localeCompare(b.title, "de"));
+
+  const knownKeys = new Set(subscriptions.map(subscriptionKey));
+  for (const key of selectedSubscriptionKeys) {
+    if (!knownKeys.has(key)) selectedSubscriptionKeys.delete(key);
+  }
+  selectionMode = selectedSubscriptionKeys.size > 0;
 
   $("nav-count-subscriptions").textContent = subscriptions.length || "";
   renderSubscriptions();
@@ -383,105 +405,160 @@ function visibleSubscriptions() {
   return items.sort(sorter);
 }
 
-/* Eine Kachel im Raster: Cover (oder Initiale), Titel darunter — zum Finden
- * nach dem Bild statt nach dem Namen. */
+const subscriptionKey = (item) => `${item.kind}:${item.id}`;
+
+function updateSelectionUi() {
+  $("bulk-toolbar").hidden = selectedSubscriptionKeys.size === 0;
+  $("bulk-count").textContent = `${selectedSubscriptionKeys.size} ausgewählt`;
+}
+
+function clearSelection() {
+  selectedSubscriptionKeys.clear();
+  selectionMode = false;
+  $("bulk-panel").hidden = true;
+  updateSelectionUi();
+  renderSubscriptions();
+}
+
+function toggleSelection(item) {
+  const key = subscriptionKey(item);
+  if (selectedSubscriptionKeys.has(key)) selectedSubscriptionKeys.delete(key);
+  else selectedSubscriptionKeys.add(key);
+  selectionMode = selectedSubscriptionKeys.size > 0;
+  updateSelectionUi();
+  renderSubscriptions();
+}
+
+function bindSelection(node, item) {
+  let held = false;
+  const start = () => {
+    held = false;
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      held = true;
+      selectionMode = true;
+      toggleSelection(item);
+    }, 550);
+  };
+  node.addEventListener("pointerdown", start);
+  node.addEventListener("pointerup", () => clearTimeout(longPressTimer));
+  node.addEventListener("pointerleave", () => clearTimeout(longPressTimer));
+  node.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    selectionMode = true;
+    toggleSelection(item);
+  });
+  node.addEventListener("click", (event) => {
+    if (held) { event.preventDefault(); return; }
+    if (selectionMode || event.metaKey || event.ctrlKey) {
+      toggleSelection(item);
+    } else {
+      openDetail(item.id, item.kind);
+    }
+  });
+}
+
 function gridTile(item) {
-  const tile = el("button", "tile" + (item.enabled ? "" : " is-paused"));
+  const selected = selectedSubscriptionKeys.has(subscriptionKey(item));
+  const tile = el("button", "tile" + (item.enabled ? "" : " is-paused") + (selected ? " is-selected" : ""));
   tile.type = "button";
-  if (!item.enabled) {
-    // Im Raster gibt es keine Textzeile fuer Abzeichen — das Zeichen muss auf
-    // dem Bild sitzen, sonst sieht man den Zustand nur in der Liste.
-    tile.appendChild(el("span", "tile-flag", "⏸"));
-  }
+  if (!item.enabled) tile.appendChild(el("span", "tile-flag", "⏸"));
   if (item.hasCover) {
-    const img = el("img");
-    img.src = coverUrl(item);
-    img.loading = "lazy";
-    img.alt = "";
-    tile.appendChild(img);
-  } else {
-    tile.appendChild(el("div", "tile-fallback", item.title.slice(0, 1)));
-  }
+    const img = el("img"); img.src = coverUrl(item); img.loading = "lazy"; img.alt = ""; tile.appendChild(img);
+  } else tile.appendChild(el("div", "tile-fallback", item.title.slice(0, 1)));
   tile.appendChild(el("div", "tile-title", item.title));
-  tile.appendChild(
-    el(
-      "div",
-      "tile-meta",
-      `${kindLabel(item.mediaKind)} · ${item.downloadedChapters}/${item.knownChapters}`
-    )
-  );
-  tile.addEventListener("click", () => openDetail(item.id));
+  tile.appendChild(el("div", "tile-meta", `${kindLabel(item.mediaKind)} · ${item.downloadedChapters}/${item.knownChapters}`));
+  bindSelection(tile, item);
   return tile;
 }
 
-function renderSubscriptions() {
-  const list = $("subscription-list");
-  const empty = $("subscription-empty");
-  clear(list);
-  list.className = "cards" + (viewMode === "grid" ? " grid" : "");
+function tableValue(item, key) {
+  const date = (value) => value ? new Date(value * 1000).toLocaleDateString("de-DE") : "—";
+  switch (key) {
+    case "title": return item.title;
+    case "type": return kindLabel(item.mediaKind);
+    case "source": return item.source;
+    case "author": return item.author || "—";
+    case "genres": return (item.genres || []).join(", ") || "—";
+    case "tags": return (item.tags || []).join(", ") || "—";
+    case "status": return STATUS_LABELS[statusKey(item)]?.text || statusKey(item);
+    case "progress": return `${item.downloadedChapters} / ${item.knownChapters}`;
+    case "release": return date(item.latestReleaseUnix);
+    case "checked": return date(item.lastCheckUnix);
+    case "added": return date(item.createdAtUnix);
+    case "target": return item.targetDir || item.deliveredTo || "Standard";
+    case "delay": return item.downloadDelayMs ? `${item.downloadDelayMs} ms` : "Standard";
+    case "limit": return item.downloadLimit || "—";
+    case "description": return item.description || "—";
+    case "error": return item.lastError || "—";
+    default: return "—";
+  }
+}
 
+function renderColumnMenu(anchor) {
+  document.querySelectorAll(".column-menu").forEach((node) => node.remove());
+  const menu = el("div", "column-menu");
+  for (const [key, label] of TABLE_COLUMNS) {
+    const row = el("label", "column-menu-item");
+    const check = document.createElement("input"); check.type = "checkbox"; check.checked = tableColumns.includes(key);
+    check.disabled = key === "title";
+    check.addEventListener("change", () => {
+      tableColumns = TABLE_COLUMNS.map(([id]) => id).filter((id) => id === "title" || (id === key ? check.checked : tableColumns.includes(id)));
+      localStorage.setItem("fero.tableColumns", JSON.stringify(tableColumns));
+      menu.remove(); renderSubscriptions();
+    });
+    row.append(check, document.createTextNode(label)); menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.min(rect.left, window.innerWidth - 250)}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+  setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+}
+
+function renderTable(items, list) {
+  const wrap = el("div", "table-wrap");
+  const table = el("table", "subscription-table");
+  const head = document.createElement("thead"), headRow = document.createElement("tr");
+  for (const [key, label] of TABLE_COLUMNS.filter(([key]) => tableColumns.includes(key))) {
+    const th = document.createElement("th"), button = el("button", "table-sort", label);
+    if (tableSort.key === key) button.textContent += tableSort.direction === 1 ? " ↑" : " ↓";
+    button.addEventListener("click", () => {
+      tableSort = { key, direction: tableSort.key === key ? -tableSort.direction : 1 };
+      renderSubscriptions();
+    });
+    th.appendChild(button);
+    th.addEventListener("contextmenu", (event) => { event.preventDefault(); renderColumnMenu(th); });
+    headRow.appendChild(th);
+  }
+  head.appendChild(headRow); table.appendChild(head);
+  const body = document.createElement("tbody");
+  const sorted = [...items];
+  if (tableSort.key) sorted.sort((a, b) => tableValue(a, tableSort.key).localeCompare(tableValue(b, tableSort.key), "de", { numeric: true }) * tableSort.direction);
+  for (const item of sorted) {
+    const row = document.createElement("tr");
+    row.className = selectedSubscriptionKeys.has(subscriptionKey(item)) ? "is-selected" : "";
+    for (const [key] of TABLE_COLUMNS.filter(([key]) => tableColumns.includes(key))) {
+      const cell = document.createElement("td"); cell.textContent = tableValue(item, key); row.appendChild(cell);
+    }
+    bindSelection(row, item); body.appendChild(row);
+  }
+  table.appendChild(body); wrap.appendChild(table); list.appendChild(wrap);
+}
+
+function renderSubscriptions() {
+  const list = $("subscription-list"), empty = $("subscription-empty");
+  clear(list); list.className = "cards" + (viewMode === "grid" ? " grid" : "");
   const items = visibleSubscriptions();
-  if (items.length === 0) {
+  updateSelectionUi();
+  if (!items.length) {
     empty.hidden = false;
-    empty.textContent = subscriptions.length
-      ? "Keine Treffer für diesen Filter."
-      : "Noch keine Abos. Oben rechts eins hinzufügen.";
+    empty.textContent = subscriptions.length ? "Keine Treffer für diesen Filter." : "Noch keine Abos. Oben rechts eins hinzufügen.";
     return;
   }
   empty.hidden = true;
-
-  if (viewMode === "grid") {
-    for (const item of items) {
-      list.appendChild(gridTile(item));
-    }
-    return;
-  }
-
-  for (const item of items) {
-    const card = el("button", "card" + (item.enabled ? "" : " is-paused"));
-    card.type = "button";
-
-    if (item.hasCover) {
-      const thumb = el("img", "card-thumb");
-      thumb.src = coverUrl(item);
-      thumb.loading = "lazy";
-      thumb.alt = "";
-      card.appendChild(thumb);
-    } else {
-      card.appendChild(el("div", "card-thumb fallback", item.title.slice(0, 1)));
-    }
-
-    const left = el("div");
-    left.appendChild(el("div", "card-title", item.title));
-    left.appendChild(
-      el("div", "card-meta", `${kindLabel(item.mediaKind)} · ${item.source}`)
-    );
-
-    const badges = el("div", "badges");
-    if (!item.enabled) badges.appendChild(el("span", "badge off", "⏸ pausiert"));
-    // Der ermittelte Status schlaegt die Handschalter; nur solange keine Quelle
-    // befragt wurde, zaehlen completed/hiatus.
-    const badge = statusBadge(item.seriesStatus);
-    if (badge) {
-      badges.appendChild(badge);
-    } else {
-      if (item.completed) badges.appendChild(el("span", "badge ok", "abgeschlossen"));
-      if (item.hiatus) badges.appendChild(el("span", "badge warn", "Hiatus"));
-    }
-    if (item.lastError) badges.appendChild(el("span", "badge warn", "Fehler"));
-    if (badges.childElementCount) left.appendChild(badges);
-
-    const right = el(
-      "div",
-      "card-progress",
-      `${item.downloadedChapters} / ${item.knownChapters}`
-    );
-
-    card.appendChild(left);
-    card.appendChild(right);
-    card.addEventListener("click", () => openDetail(item.id));
-    list.appendChild(card);
-  }
+  if (viewMode === "grid") { items.forEach((item) => list.appendChild(gridTile(item))); return; }
+  renderTable(items, list);
 }
 
 $("view-list").addEventListener("click", () => setViewMode("list"));
@@ -535,6 +612,123 @@ $("add-submit").addEventListener("click", async () => {
   }
 });
 
+// ── Listenimport und Sammelbearbeitung ──────────────────────────────────
+
+function importedUrls(value) {
+  return [...new Set(value.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")))];
+}
+
+$("batch-import-open").addEventListener("click", () => {
+  $("batch-import-panel").hidden = false;
+  $("batch-import-urls").focus();
+});
+$("batch-import-cancel").addEventListener("click", () => {
+  $("batch-import-panel").hidden = true;
+  setFeedback($("batch-import-feedback"), "");
+});
+$("batch-import-file").addEventListener("change", async (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  try {
+    if (file.size > 1024 * 1024) throw new Error("Die Liste darf höchstens 1 MB groß sein.");
+    $("batch-import-urls").value = await file.text();
+    setFeedback($("batch-import-feedback"), `${file.name} geladen.`, "ok");
+  } catch (error) {
+    setFeedback($("batch-import-feedback"), error.message, "error");
+  }
+});
+$("batch-import-submit").addEventListener("click", async () => {
+  const urls = importedUrls($("batch-import-urls").value);
+  const kind = $("batch-import-kind").value;
+  const button = $("batch-import-submit"), feedback = $("batch-import-feedback");
+  if (!urls.length) { setFeedback(feedback, "Bitte mindestens einen Link angeben.", "error"); return; }
+  button.disabled = true;
+  let added = 0, existing = 0, failed = 0;
+  try {
+    for (let index = 0; index < urls.length; index += 1) {
+      setFeedback(feedback, `Importiere ${index + 1} von ${urls.length} …`);
+      try {
+        const result = await post(`${engineFor(kind)}/subscribe`, { url: urls[index], mediaKind: kind });
+        if (result.alreadySubscribed) existing += 1; else added += 1;
+      } catch (error) { failed += 1; }
+    }
+    await loadSubscriptions();
+    setFeedback(feedback, `${added} hinzugefügt, ${existing} bereits vorhanden${failed ? `, ${failed} fehlgeschlagen` : ""}.`, failed ? "error" : "ok");
+  } finally { button.disabled = false; }
+});
+
+function selectedSubscriptions() {
+  return subscriptions.filter((item) => selectedSubscriptionKeys.has(subscriptionKey(item)));
+}
+
+function fillBulkKindSelect(items) {
+  const select = $("bulk-kind"), engines = [...new Set(items.map((item) => item.kind))];
+  clear(select);
+  if (engines.length !== 1) {
+    select.appendChild(new Option("Bei gemischter Auswahl nicht änderbar", "")); select.disabled = true; return;
+  }
+  select.disabled = false;
+  for (const kind of mediaKinds.filter((kind) => kind.subscribable && engineFor(kind.id) === engines[0])) {
+    select.appendChild(new Option(kind.label, kind.id));
+  }
+  const types = new Set(items.map((item) => item.mediaKind));
+  if (types.size === 1) select.value = items[0].mediaKind;
+  else select.insertBefore(new Option("Typ beibehalten", ""), select.firstChild);
+}
+
+function openBulkPanel(action) {
+  const items = selectedSubscriptions();
+  if (!items.length) return;
+  const syncing = action === "sync";
+  $("bulk-panel").hidden = false;
+  $("bulk-panel").dataset.action = action;
+  $("bulk-panel-title").textContent = syncing ? "Informationen abgleichen" : "Auswahl bearbeiten";
+  $("bulk-kind-field").hidden = syncing;
+  $("bulk-genres-field").hidden = syncing;
+  $("bulk-tags-field").hidden = syncing;
+  $("bulk-sync-hint").hidden = !syncing;
+  $("bulk-submit").textContent = syncing ? "Abgleich starten" : "Änderungen speichern";
+  $("bulk-genres").value = ""; $("bulk-tags").value = "";
+  fillBulkKindSelect(items);
+  setFeedback($("bulk-feedback"), "");
+}
+
+$("bulk-edit-open").addEventListener("click", () => openBulkPanel("edit"));
+$("bulk-sync-open").addEventListener("click", () => openBulkPanel("sync"));
+$("bulk-clear").addEventListener("click", clearSelection);
+$("bulk-cancel").addEventListener("click", () => { $("bulk-panel").hidden = true; });
+$("bulk-submit").addEventListener("click", async () => {
+  const items = selectedSubscriptions(), panel = $("bulk-panel"), feedback = $("bulk-feedback");
+  const mode = $("bulk-mode").value, button = $("bulk-submit");
+  if (!items.length) return;
+  button.disabled = true;
+  try {
+    if (panel.dataset.action === "sync") {
+      for (let index = 0; index < items.length; index += 1) {
+        setFeedback(feedback, `Gleiche ${index + 1} von ${items.length} ab …`);
+        await startCheck(items[index].kind, items[index].id, { metadataMode: mode, manual: true });
+      }
+      setFeedback(feedback, `${items.length} Werke abgeglichen.`, "ok");
+    } else {
+      const genres = importedUrls($("bulk-genres").value.replace(/,/g, "\n"));
+      const tags = importedUrls($("bulk-tags").value.replace(/,/g, "\n"));
+      const mediaKind = $("bulk-kind").disabled ? "" : $("bulk-kind").value;
+      if (!genres.length && !tags.length && !mediaKind) { throw new Error("Mindestens Typ, Genre oder Tag angeben."); }
+      for (let index = 0; index < items.length; index += 1) {
+        setFeedback(feedback, `Speichere ${index + 1} von ${items.length} …`);
+        const payload = { id: items[index].id, metadataMode: mode };
+        if (genres.length) payload.genres = genres;
+        if (tags.length) payload.tags = tags;
+        if (mediaKind) payload.mediaKind = mediaKind;
+        await post(`${items[index].kind}/update`, payload);
+      }
+      await loadSubscriptions();
+      setFeedback(feedback, `${items.length} Werke aktualisiert.`, "ok");
+    }
+  } catch (error) { setFeedback(feedback, error.message, "error"); }
+  finally { button.disabled = false; }
+});
+
 // ── Detailansicht ────────────────────────────────────────────────────────
 
 function fact(list, term, value) {
@@ -543,10 +737,11 @@ function fact(list, term, value) {
   list.appendChild(el("dd", null, String(value)));
 }
 
-function openDetail(id) {
-  const item = subscriptions.find((entry) => entry.id === id);
+function openDetail(id, kind) {
+  const item = subscriptions.find((entry) => entry.id === id && (!kind || entry.kind === kind));
   if (!item) return;
   currentDetailId = id;
+  currentDetailKind = item.kind;
 
   $("detail-title").textContent = item.title;
 
@@ -634,6 +829,10 @@ function openDetail(id) {
   renderDetailStatus(item);
   refreshLoginState();
   showView("detail");
+  requestAnimationFrame(() => {
+    document.querySelector(".main")?.scrollTo?.({ top: 0, behavior: "auto" });
+    window.scrollTo(0, 0);
+  });
 }
 
 function renderDetailTarget(item) {
@@ -661,7 +860,7 @@ function renderDetailTarget(item) {
 }
 
 function currentItem() {
-  return subscriptions.find((entry) => entry.id === currentDetailId);
+  return subscriptions.find((entry) => entry.id === currentDetailId && entry.kind === currentDetailKind);
 }
 
 /* Die Statusquelle unterscheidet sich je Engine: Webnovels lesen eine
@@ -705,7 +904,7 @@ $("detail-status-save").addEventListener("click", async () => {
     await post(`${item.kind}/update`, { id: item.id, statusOverride: choice });
     await loadSubscriptions();
     const updated = currentItem();
-    if (updated) openDetail(updated.id);
+    if (updated) openDetail(updated.id, updated.kind);
     setFeedback(
       node,
       choice === "auto"
@@ -846,7 +1045,7 @@ $("detail-kind-save").addEventListener("click", async () => {
     });
     await loadSubscriptions();
     const updated = currentItem();
-    if (updated) openDetail(updated.id);
+    if (updated) openDetail(updated.id, updated.kind);
     setFeedback(node, "Gespeichert.", "ok");
   } catch (error) {
     setFeedback(node, error.message, "error");
@@ -869,7 +1068,7 @@ $("detail-relocate").addEventListener("click", async () => {
     await post("relocate", { id: item.id, kind: item.mediaKind });
     await loadSubscriptions();
     const updated = currentItem();
-    if (updated) openDetail(updated.id);
+    if (updated) openDetail(updated.id, updated.kind);
     setFeedback(node, "Verschoben — die Dateien liegen jetzt am Ziel.", "ok");
   } catch (error) {
     setFeedback(node, error.message, "error");
@@ -1108,6 +1307,7 @@ $("detail-delete").addEventListener("click", async () => {
     await post(`${item.kind}/unsubscribe`, { id: item.id, keepFiles: true });
     status(`„${item.title}" entfernt. Die Dateien liegen weiterhin am Zielort.`);
     currentDetailId = null;
+    currentDetailKind = null;
     showView("subscriptions");
     await loadSubscriptions();
   } catch (error) {
@@ -1130,12 +1330,12 @@ const ENGINE_LABELS = { webnovel: "Webnovels", manga: "Manga" };
  * Webnovel-Pruefung immer eine Job-Id liefert, kam die Manga-Pruefung bei
  * „Alle pruefen" nie an die Reihe. Wer nur Manga abonniert hatte, sah
  * „Keine passenden Abonnements." und keinen einzigen Download. */
-async function startCheck(kind, id) {
+async function startCheck(kind, id, extra = {}) {
   const kinds = kind ? [kind] : ["webnovel", "manga"];
   const messages = [];
   try {
     for (const each of kinds) {
-      const result = await post(`${each}/check`, id ? { id } : {});
+      const result = await post(`${each}/check`, id ? { id, ...extra } : extra);
       if (!result.jobId) continue;
       const outcome = await runJob(each, result.jobId);
       if (outcome.message) {
@@ -1153,7 +1353,7 @@ async function startCheck(kind, id) {
     status(error.message, true);
   }
   await loadSubscriptions();
-  if (currentDetailId) openDetail(currentDetailId);
+  if (currentDetailId) openDetail(currentDetailId, currentDetailKind);
 }
 
 /* Verfolgt einen Job bis zum Ende und loest mit seinem Schlusswort auf. */
@@ -1342,15 +1542,18 @@ async function loadTargets() {
 /** Hält die Typ-Auswahlfelder mit dem Backend in Deckung. */
 function syncKindSelectors() {
   const addSelect = $("add-kind");
+  const importSelect = $("batch-import-kind");
   const filterSelect = $("kind-filter");
   const previousFilter = filterSelect.value;
 
   clear(addSelect);
+  clear(importSelect);
   clear(filterSelect);
   filterSelect.appendChild(new Option("Alle Typen", ""));
   for (const kind of mediaKinds) {
     if (kind.subscribable) {
       addSelect.appendChild(new Option(kind.label, kind.id));
+      importSelect.appendChild(new Option(kind.label, kind.id));
     }
     filterSelect.appendChild(new Option(kind.label, kind.id));
   }

@@ -84,6 +84,7 @@
           </select>
           <button class="action ghost" id="view-list" title="Listenansicht">Liste</button>
           <button class="action ghost" id="view-grid" title="Rasteransicht mit Covern">Raster</button>
+          <button class="action" id="batch-import-open">Liste importieren</button>
           <button class="action primary" id="add-open">Abo hinzufügen</button>
         </div>
       </header>
@@ -102,6 +103,63 @@
           <button class="action" id="add-cancel">Abbrechen</button>
         </div>
         <p class="feedback" id="add-feedback"></p>
+      </div>
+
+      <div class="add-panel" id="batch-import-panel" hidden>
+        <label class="field">
+          <span>Links – ein Werk pro Zeile</span>
+          <textarea id="batch-import-urls" class="input import-text" rows="7" placeholder="https://…\nhttps://…"></textarea>
+        </label>
+        <label class="field">
+          <span>Oder Textdatei wählen (.txt, .csv, .list)</span>
+          <input type="file" id="batch-import-file" class="input" accept=".txt,.csv,.list,.url,text/plain" />
+        </label>
+        <label class="field">
+          <span>Medientyp für alle Links</span>
+          <select id="batch-import-kind" class="input"></select>
+        </label>
+        <p class="hint">Leere Zeilen und Zeilen, die mit # beginnen, werden übersprungen. Bereits vorhandene Abos bleiben unverändert.</p>
+        <div class="row">
+          <button class="action primary" id="batch-import-submit">Importieren</button>
+          <button class="action" id="batch-import-cancel">Abbrechen</button>
+        </div>
+        <p class="feedback" id="batch-import-feedback"></p>
+      </div>
+
+      <div class="bulk-toolbar" id="bulk-toolbar" hidden>
+        <span id="bulk-count">0 ausgewählt</span>
+        <button class="action" id="bulk-edit-open">Bearbeiten</button>
+        <button class="action" id="bulk-sync-open">Infos abgleichen</button>
+        <button class="action ghost" id="bulk-clear">Auswahl aufheben</button>
+      </div>
+
+      <div class="add-panel" id="bulk-panel" hidden>
+        <p class="panel-label" id="bulk-panel-title">Auswahl bearbeiten</p>
+        <label class="field" id="bulk-kind-field">
+          <span>Medientyp</span>
+          <select id="bulk-kind" class="input"></select>
+        </label>
+        <label class="field" id="bulk-genres-field">
+          <span>Genres (mit Komma trennen)</span>
+          <input id="bulk-genres" class="input" placeholder="Fantasy, Action" />
+        </label>
+        <label class="field" id="bulk-tags-field">
+          <span>Tags (mit Komma trennen)</span>
+          <input id="bulk-tags" class="input" placeholder="Reinkarnation, Magie" />
+        </label>
+        <label class="field">
+          <span>Änderungen anwenden</span>
+          <select id="bulk-mode" class="input">
+            <option value="add">Ergänzen – vorhandene Genres und Tags behalten</option>
+            <option value="replace">Ersetzen – die angegebenen Genres und Tags übernehmen</option>
+          </select>
+        </label>
+        <p class="hint" id="bulk-sync-hint" hidden>Die Informationsseiten der ausgewählten Werke werden nacheinander gelesen. Bei „Ersetzen“ werden nur Angaben ersetzt, die die Quelle tatsächlich liefert.</p>
+        <div class="row">
+          <button class="action primary" id="bulk-submit">Änderungen speichern</button>
+          <button class="action" id="bulk-cancel">Abbrechen</button>
+        </div>
+        <p class="feedback" id="bulk-feedback"></p>
       </div>
 
       <div class="cards" id="subscription-list"></div>

@@ -287,6 +287,28 @@ body {
   background: var(--bg-raised);
 }
 
+.import-text {
+  width: 100%;
+  resize: vertical;
+}
+
+.bulk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: var(--gap);
+  border: 1px solid #6aa9ff66;
+  border-radius: var(--radius);
+  background: #6aa9ff12;
+}
+
+.bulk-toolbar span {
+  margin-right: auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Quellenkatalog ────────────────────────────────────────────────────── */
 
 .source-tabs {
@@ -759,6 +781,97 @@ body {
 .cards.grid {
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 14px;
+}
+
+.tile.is-selected,
+.subscription-table tr.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: #6aa9ff1a;
+}
+
+/* ── Abo-Tabelle ──────────────────────────────────────────────────────── */
+
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.subscription-table {
+  width: 100%;
+  min-width: 1050px;
+  border-collapse: collapse;
+  background: var(--bg-raised);
+}
+
+.subscription-table th,
+.subscription-table td {
+  max-width: 290px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subscription-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--bg-input);
+}
+
+.subscription-table td {
+  color: var(--text-dim);
+}
+
+.subscription-table td:first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.subscription-table tbody tr {
+  cursor: pointer;
+}
+
+.subscription-table tbody tr:hover {
+  background: #ffffff08;
+}
+
+.table-sort {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.column-menu {
+  position: fixed;
+  z-index: 110;
+  width: 245px;
+  max-height: min(70vh, 500px);
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: 0 12px 32px #0009;
+}
+
+.column-menu-item {
+  display: flex;
+  gap: 8px;
+  padding: 6px 7px;
+  color: var(--text-dim);
+  cursor: pointer;
 }
 
 .tile {

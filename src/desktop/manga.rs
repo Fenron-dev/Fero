@@ -505,7 +505,7 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         .and_then(MediaKind::from_id)
         .filter(|kind| kind.uses_manga_engine());
     subscription.folder_name = Some(unique_manga_folder_name(&ws, &subscription));
-    apply_series_info(&mut subscription, &info);
+    apply_series_info(&mut subscription, &info, MetadataMode::Fill);
     subscription.known_chapters = info
         .chapters
         .iter()
@@ -539,26 +539,77 @@ fn known_chapter(index: u32, chapter: &MangaChapterRef) -> KnownChapter {
     }
 }
 
-/// Copies scraped series metadata into a subscription without overwriting
-/// anything the user (or an earlier, richer source) already filled in.
-fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo) {
-    if subscription.author.is_none() {
+/// Determines whether metadata fills gaps or refreshes values supplied by a
+/// source page. Empty values from a source never erase existing information.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MetadataMode {
+    Fill,
+    Add,
+    Replace,
+}
+
+impl MetadataMode {
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("add") => Self::Add,
+            Some("replace") => Self::Replace,
+            _ => Self::Fill,
+        }
+    }
+}
+
+fn merge_labels(current: &mut Vec<String>, incoming: Vec<String>, mode: MetadataMode) {
+    if mode == MetadataMode::Replace && incoming.is_empty() {
+        return;
+    }
+    let mut labels = if mode == MetadataMode::Replace {
+        Vec::new()
+    } else {
+        current.clone()
+    };
+    for label in incoming {
+        let label = label.trim();
+        if !label.is_empty() && !labels.iter().any(|known| known.eq_ignore_ascii_case(label)) {
+            labels.push(label.to_string());
+        }
+    }
+    *current = labels;
+}
+
+/// Copies scraped series metadata into a subscription. Routine checks fill
+/// gaps; an explicit metadata refresh can replace values that the source has.
+fn apply_series_info(subscription: &mut Subscription, info: &MangaInfo, mode: MetadataMode) {
+    if (mode == MetadataMode::Replace && info.author.is_some()) || subscription.author.is_none() {
         subscription.author = info.author.clone();
     }
-    if subscription.artist.is_none() {
+    if (mode == MetadataMode::Replace && info.artist.is_some()) || subscription.artist.is_none() {
         subscription.artist = info.artist.clone();
     }
-    if subscription.description.is_none() {
+    if (mode == MetadataMode::Replace && info.description.is_some()) || subscription.description.is_none()
+    {
         subscription.description = info.description.clone();
     }
-    if subscription.cover_url.is_none() {
+    if (mode == MetadataMode::Replace && info.cover_url.is_some()) || subscription.cover_url.is_none() {
         subscription.cover_url = info.cover_url.clone();
     }
-    if subscription.genres.is_empty() {
-        subscription.genres = info.genres.clone();
-    }
-    if subscription.tags.is_empty() {
-        subscription.tags = info.tags.clone();
+    if mode == MetadataMode::Replace || mode == MetadataMode::Add {
+        merge_labels(&mut subscription.genres, info.genres.clone(), mode);
+        merge_labels(&mut subscription.tags, info.tags.clone(), mode);
+    } else {
+        if subscription.genres.is_empty() {
+            merge_labels(
+                &mut subscription.genres,
+                info.genres.clone(),
+                MetadataMode::Replace,
+            );
+        }
+        if subscription.tags.is_empty() {
+            merge_labels(
+                &mut subscription.tags,
+                info.tags.clone(),
+                MetadataMode::Replace,
+            );
+        }
     }
     // Nur solange der Nutzer nichts von Hand gesetzt hat: sonst haette er
     // seine Entscheidung nach jedem Prueflauf erneut zu treffen.
@@ -804,6 +855,13 @@ struct UpdateRequest {
     hiatus: Option<bool>,
     #[serde(default)]
     enabled: Option<bool>,
+    /// Genres and tags supplied by the bulk editor.
+    #[serde(default)]
+    genres: Option<Vec<String>>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    metadata_mode: Option<String>,
 }
 
 /// Toggles the completed/hiatus/paused flags of a subscription.
@@ -867,6 +925,13 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
             subscription.media_kind = Some(kind);
         }
     }
+    let metadata_mode = MetadataMode::parse(req.metadata_mode.as_deref());
+    if let Some(genres) = req.genres {
+        merge_labels(&mut subscription.genres, genres, metadata_mode);
+    }
+    if let Some(tags) = req.tags {
+        merge_labels(&mut subscription.tags, tags, metadata_mode);
+    }
 
     match save_subscription(&ws.store, &subscription) {
         Ok(()) => MangaSimpleResponse::ok(),
@@ -895,6 +960,9 @@ struct CheckRequest {
     /// that runs for days; the next check simply picks up where this stopped.
     #[serde(default)]
     max_chapters: Option<usize>,
+    /// Fill keeps existing values; replace refreshes metadata from the source.
+    #[serde(default)]
+    metadata_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -911,6 +979,7 @@ struct CheckOptions {
     only_id: Option<String>,
     delay_ms: Option<u64>,
     max_chapters: Option<usize>,
+    metadata_mode: MetadataMode,
 }
 
 /// Starts a background check run and returns its job id.
@@ -959,6 +1028,7 @@ pub(crate) fn build_check_response(body: &[u8]) -> MangaCheckResponse {
         only_id: req.id,
         delay_ms: req.delay_ms,
         max_chapters: req.max_chapters,
+        metadata_mode: MetadataMode::parse(req.metadata_mode.as_deref()),
     };
     spawn_check(ws, options, job_id.clone());
 
@@ -1027,6 +1097,7 @@ pub(super) fn start_scheduled_check() -> bool {
             only_id: None,
             delay_ms: None,
             max_chapters: None,
+            metadata_mode: MetadataMode::Fill,
         },
         job_id,
     );
@@ -1209,7 +1280,7 @@ fn check_one(
     ));
 
     let info = source.fetch_series_info(client, &subscription.url)?;
-    apply_series_info(subscription, &info);
+    apply_series_info(subscription, &info, options.metadata_mode);
     enrich_from_anilist(subscription);
 
     // Diff by normalized URL. Chapters that vanished upstream are kept —
@@ -1914,6 +1985,7 @@ mod tests {
                 completed_hint: Some(true),
                 ..MangaInfo::default()
             },
+            MetadataMode::Fill,
         );
 
         // Existing values win; empty ones get filled.
@@ -1921,6 +1993,28 @@ mod tests {
         assert_eq!(record.genres, vec!["Drama".to_string()]);
         assert_eq!(record.artist.as_deref(), Some("Zeichner"));
         assert!(record.completed);
+    }
+
+    #[test]
+    fn explicit_metadata_refresh_replaces_source_values_but_not_missing_ones() {
+        let mut record = subscription("Serie");
+        record.author = Some("Alt".to_string());
+        record.genres = vec!["Drama".to_string()];
+        record.tags = vec!["Erhalten".to_string()];
+
+        apply_series_info(
+            &mut record,
+            &MangaInfo {
+                author: Some("Neu".to_string()),
+                genres: vec!["Action".to_string()],
+                ..MangaInfo::default()
+            },
+            MetadataMode::Replace,
+        );
+
+        assert_eq!(record.author.as_deref(), Some("Neu"));
+        assert_eq!(record.genres, vec!["Action".to_string()]);
+        assert_eq!(record.tags, vec!["Erhalten".to_string()]);
     }
 
     /// Der Fall, der den Handschalter noetig gemacht hat: eine Quellseite darf
@@ -1936,6 +2030,7 @@ mod tests {
                 completed_hint: Some(true),
                 ..MangaInfo::default()
             },
+            MetadataMode::Fill,
         );
 
         assert!(!record.completed);

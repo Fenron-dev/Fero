@@ -748,6 +748,13 @@ struct WebnovelUpdateRequest {
     hiatus: Option<bool>,
     #[serde(default)]
     enabled: Option<bool>,
+    /// Genres and tags supplied by the bulk editor.
+    #[serde(default)]
+    genres: Option<Vec<String>>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    metadata_mode: Option<String>,
     #[serde(default)]
     root: Option<String>,
 }
@@ -814,6 +821,13 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
             subscription.media_kind = Some(kind);
         }
     }
+    let metadata_mode = MetadataMode::parse(req.metadata_mode.as_deref());
+    if let Some(genres) = req.genres {
+        merge_labels(&mut subscription.genres, genres, metadata_mode);
+    }
+    if let Some(tags) = req.tags {
+        merge_labels(&mut subscription.tags, tags, metadata_mode);
+    }
 
     match save_subscription(&ws.store, &subscription) {
         Ok(()) => SimpleResponse::ok(),
@@ -843,6 +857,9 @@ struct WebnovelCheckRequest {
     /// whitelisted hosts through the (visible) browser window.
     #[serde(default)]
     manual: bool,
+    /// Fill keeps existing values; replace refreshes metadata from the source.
+    #[serde(default)]
+    metadata_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -861,7 +878,45 @@ struct WebnovelCheckOptions {
     build_batch: bool,
     delay_ms: Option<u64>,
     goodreads_mode: GoodreadsMode,
+    metadata_mode: MetadataMode,
     manual: bool,
+}
+
+/// How source-page metadata is merged. Empty source values never erase an
+/// existing value; "replace" only changes fields that the source actually has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataMode {
+    Fill,
+    Add,
+    Replace,
+}
+
+impl MetadataMode {
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("add") => Self::Add,
+            Some("replace") => Self::Replace,
+            _ => Self::Fill,
+        }
+    }
+}
+
+fn merge_labels(current: &mut Vec<String>, incoming: Vec<String>, mode: MetadataMode) {
+    if mode == MetadataMode::Replace && incoming.is_empty() {
+        return;
+    }
+    let mut labels = if mode == MetadataMode::Replace {
+        Vec::new()
+    } else {
+        current.clone()
+    };
+    for label in incoming {
+        let label = label.trim();
+        if !label.is_empty() && !labels.iter().any(|known| known.eq_ignore_ascii_case(label)) {
+            labels.push(label.to_string());
+        }
+    }
+    *current = labels;
 }
 
 /// How Goodreads results are merged into a subscription's metadata.
@@ -933,6 +988,7 @@ pub(super) fn build_webnovel_check_response(body: &[u8]) -> WebnovelCheckRespons
         build_batch: req.build_batch,
         delay_ms: req.delay_ms,
         goodreads_mode: GoodreadsMode::parse(req.goodreads_mode.as_deref()),
+        metadata_mode: MetadataMode::parse(req.metadata_mode.as_deref()),
         manual: req.manual,
     };
     spawn_check(ws, options, job_id.clone());
@@ -997,6 +1053,7 @@ pub(super) fn start_scheduled_check() -> bool {
             build_batch: true,
             delay_ms: None,
             goodreads_mode: GoodreadsMode::Fill,
+            metadata_mode: MetadataMode::Fill,
             manual: false,
         },
         job_id,
@@ -1283,21 +1340,44 @@ fn check_one_subscription(
         }
     };
 
-    // Fill metadata gaps and pick up a "finished" flag from the source.
-    if subscription.author.is_none() {
+    // Routine checks only fill gaps. The bulk refresh is allowed to replace
+    // fields that are actually present on the subscribed source page.
+    let replace_metadata = options.metadata_mode == MetadataMode::Replace;
+    if (replace_metadata && info.author.is_some()) || subscription.author.is_none() {
         subscription.author = info.author.clone();
     }
-    if subscription.description.is_none() {
+    if (replace_metadata && info.description.is_some()) || subscription.description.is_none() {
         subscription.description = info.description.clone();
     }
-    if subscription.cover_url.is_none() {
+    if (replace_metadata && info.cover_url.is_some()) || subscription.cover_url.is_none() {
         subscription.cover_url = info.cover_url.clone();
     }
-    if subscription.genres.is_empty() {
-        subscription.genres = info.genres.clone();
-    }
-    if subscription.tags.is_empty() {
-        subscription.tags = info.tags.clone();
+    if matches!(options.metadata_mode, MetadataMode::Add | MetadataMode::Replace) {
+        merge_labels(
+            &mut subscription.genres,
+            info.genres.clone(),
+            options.metadata_mode,
+        );
+        merge_labels(
+            &mut subscription.tags,
+            info.tags.clone(),
+            options.metadata_mode,
+        );
+    } else {
+        if subscription.genres.is_empty() {
+            merge_labels(
+                &mut subscription.genres,
+                info.genres.clone(),
+                MetadataMode::Replace,
+            );
+        }
+        if subscription.tags.is_empty() {
+            merge_labels(
+                &mut subscription.tags,
+                info.tags.clone(),
+                MetadataMode::Replace,
+            );
+        }
     }
     // Nur solange der Nutzer nichts von Hand gesetzt hat: sonst haette er
     // seine Entscheidung nach jedem Prueflauf erneut zu treffen.
