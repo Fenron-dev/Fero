@@ -2,8 +2,9 @@
 //!
 //! NovelFire's overview and chapter pages use the same engine as its current
 //! public reader. The full ToC lives under `/book/<slug>/chapters?page=N` and
-//! contains one hundred entries per page. Cloudflare-protected pages are read
-//! through Fero's manual embedded-browser route.
+//! contains one hundred entries per page. Chapter text is inside the
+//! `article#chapter-article #content` element. Cloudflare-protected pages are
+//! read through Fero's manual embedded-browser route.
 
 use scraper::{Html, Selector};
 
@@ -14,7 +15,14 @@ use super::{
 use crate::error::{FeroError, Result};
 
 const MAX_TOC_PAGES: u32 = 1_000;
-const CHAPTER_CONTENT_SELECTORS: [&str; 3] = ["#content", ".chapter-content", "main"];
+const CHAPTER_CONTENT_SELECTORS: [&str; 6] = [
+    "article#chapter-article #content",
+    "#chapter-article #content",
+    "#content",
+    ".chapter-content",
+    ".chapter-container",
+    "main",
+];
 
 pub struct NovelFireSource;
 
@@ -61,7 +69,7 @@ impl NovelSource for NovelFireSource {
     fn fetch_chapter(&self, client: &PoliteClient, chapter: &ChapterRef) -> Result<ChapterContent> {
         let (_final_url, body) = client.get_text(&chapter.url)?;
         let html = Html::parse_document(&body);
-        let content = extract_content(&html, &CHAPTER_CONTENT_SELECTORS).ok_or_else(|| {
+        let content = extract_chapter_content(&html).ok_or_else(|| {
             FeroError::ExternalApi(format!(
                 "NovelFire-Kapitelinhalt nicht gefunden: {}",
                 chapter.url
@@ -69,9 +77,33 @@ impl NovelSource for NovelFireSource {
         })?;
         Ok(ChapterContent {
             title: chapter.title.clone(),
-            xhtml: sanitize_to_xhtml(&content),
+            xhtml: content,
         })
     }
+}
+
+/// Extracts the reader body without accidentally accepting the surrounding
+/// navigation shell. NovelFire currently uses `article#chapter-article #content`;
+/// the broader selectors keep older and mirror layouts working. Empty shells
+/// are ignored so a successful HTTP response cannot become an empty chapter.
+fn extract_chapter_content(html: &Html) -> Option<String> {
+    for raw_selector in CHAPTER_CONTENT_SELECTORS {
+        let Some(raw) = extract_content(html, &[raw_selector]) else {
+            continue;
+        };
+        let sanitized = sanitize_to_xhtml(&raw);
+        if has_visible_text(&sanitized) {
+            return Some(sanitized);
+        }
+    }
+    None
+}
+
+fn has_visible_text(xhtml: &str) -> bool {
+    Html::parse_fragment(xhtml)
+        .root_element()
+        .text()
+        .any(|text| !text.trim().is_empty())
 }
 
 fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
@@ -240,5 +272,28 @@ mod tests {
         assert_eq!(info.author.as_deref(), Some("N. Francis"));
         assert_eq!(info.completed_hint, Some(false));
         assert_eq!(info.genres, vec!["Fantasy".to_string()]);
+    }
+
+    #[test]
+    fn extracts_reader_body_from_current_layout() {
+        let html = Html::parse_document(
+            r#"<main><article id="chapter-article">
+              <nav>Previous Chapter · Next Chapter</nav>
+              <div id="content" class="clearfix font_default">
+                <p>The actual NovelFire chapter text.</p>
+              </div>
+            </article></main>"#,
+        );
+        let content = extract_chapter_content(&html).expect("reader body should extract");
+        assert!(content.contains("The actual NovelFire chapter text."));
+        assert!(!content.contains("Previous Chapter"));
+    }
+
+    #[test]
+    fn ignores_empty_reader_shells() {
+        let html = Html::parse_document(
+            r#"<article id="chapter-article"><div id="content"><div></div></div></article>"#,
+        );
+        assert!(extract_chapter_content(&html).is_none());
     }
 }
