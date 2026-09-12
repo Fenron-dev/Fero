@@ -643,6 +643,26 @@ function importedUrls(value) {
   return [...new Set(value.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")))];
 }
 
+function renderImportDetails(existing, failures) {
+  const node = $("batch-import-details");
+  clear(node);
+  node.hidden = !existing.length && !failures.length;
+  const section = (heading, entries, withMessage) => {
+    if (!entries.length) return;
+    const group = el("section", "import-details-section");
+    group.appendChild(el("p", "import-details-heading", heading));
+    for (const entry of entries) {
+      const row = el("div", "import-detail-row");
+      row.appendChild(el("div", "import-detail-url", entry.title ? `${entry.title} — ${entry.url}` : entry.url));
+      if (withMessage) row.appendChild(el("div", "import-detail-message", entry.message));
+      group.appendChild(row);
+    }
+    node.appendChild(group);
+  };
+  section("Bereits abonniert", existing, false);
+  section("Fehlgeschlagen", failures, true);
+}
+
 $("batch-import-open").addEventListener("click", () => {
   $("batch-import-panel").hidden = false;
   $("batch-import-urls").focus();
@@ -650,6 +670,7 @@ $("batch-import-open").addEventListener("click", () => {
 $("batch-import-cancel").addEventListener("click", () => {
   $("batch-import-panel").hidden = true;
   setFeedback($("batch-import-feedback"), "");
+  renderImportDetails([], []);
 });
 $("batch-import-file").addEventListener("change", async (event) => {
   const file = event.target.files && event.target.files[0];
@@ -669,16 +690,25 @@ $("batch-import-submit").addEventListener("click", async () => {
   if (!urls.length) { setFeedback(feedback, "Bitte mindestens einen Link angeben.", "error"); return; }
   button.disabled = true;
   let added = 0, existing = 0, failed = 0;
+  const existingEntries = [], failedEntries = [];
+  renderImportDetails([], []);
   try {
     for (let index = 0; index < urls.length; index += 1) {
       setFeedback(feedback, `Importiere ${index + 1} von ${urls.length} …`);
       try {
         const result = await post(`${engineFor(kind)}/subscribe`, { url: urls[index], mediaKind: kind });
-        if (result.alreadySubscribed) existing += 1; else added += 1;
-      } catch (error) { failed += 1; }
+        if (result.alreadySubscribed) {
+          existing += 1;
+          existingEntries.push({ url: urls[index], title: result.subscription?.title });
+        } else added += 1;
+      } catch (error) {
+        failed += 1;
+        failedEntries.push({ url: urls[index], message: error.message || "Unbekannter Fehler" });
+      }
     }
     await loadSubscriptions();
     setFeedback(feedback, `${added} hinzugefügt, ${existing} bereits vorhanden${failed ? `, ${failed} fehlgeschlagen` : ""}.`, failed ? "error" : "ok");
+    renderImportDetails(existingEntries, failedEntries);
   } finally { button.disabled = false; }
 });
 

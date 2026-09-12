@@ -292,6 +292,50 @@ body {
   resize: vertical;
 }
 
+.import-details {
+  max-height: 280px;
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.import-details-section {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.import-details-section:first-child {
+  border-top: 0;
+}
+
+.import-details-heading {
+  margin: 0 0 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.import-detail-row {
+  padding: 5px 0;
+  border-top: 1px solid #ffffff0a;
+}
+
+.import-detail-url,
+.import-detail-message {
+  overflow-wrap: anywhere;
+}
+
+.import-detail-url {
+  color: var(--text);
+}
+
+.import-detail-message {
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .bulk-toolbar {
   display: flex;
   align-items: center;
