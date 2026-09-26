@@ -214,15 +214,36 @@ fn is_usable(dir: &Path) -> std::result::Result<(), String> {
         if let Err(error) = std::fs::create_dir_all(dir) {
             return Err(format!("Ordner lässt sich nicht anlegen: {error}"));
         }
-        let probe = dir.join(".fero-write-test");
-        match std::fs::write(&probe, b"") {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&probe);
-                Ok(())
-            }
-            Err(error) => Err(format!("Ordner ist nicht beschreibbar: {error}")),
-        }
+        write_probe(dir)
     })
+}
+
+/// Checks a directory Fero was *told* to use, without creating anything.
+///
+/// [`is_usable`] creates what is missing, which is right for a folder the user
+/// just picked in a dialog. For a remembered one it would be wrong: a path on a
+/// network volume that is currently not mounted would get an empty local
+/// look-alike created under the mount point, and Fero would treat that as its
+/// store — with every subscription apparently gone.
+fn is_usable_as_is(dir: &Path) -> std::result::Result<(), String> {
+    serialized_path_access(|| {
+        if !dir.is_dir() {
+            return Err("Ordner existiert nicht (Laufwerk nicht verbunden?)".to_string());
+        }
+        write_probe(dir)
+    })
+}
+
+/// Writes and removes a probe file. Callers hold the path-access gate.
+fn write_probe(dir: &Path) -> std::result::Result<(), String> {
+    let probe = dir.join(".fero-write-test");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(error) => Err(format!("Ordner ist nicht beschreibbar: {error}")),
+    }
 }
 
 /// Resolved once per process. The old implementation created and deleted a
@@ -232,10 +253,11 @@ static RESOLVED_DATA_DIR: LazyLock<Mutex<Option<DataDir>>> = LazyLock::new(|| Mu
 
 /// Resolves the data directory.
 ///
-/// Order: the portable folder next to the application, then a folder the user
-/// picked earlier. If neither works, the caller must ask — Fero does not fall
-/// back to the home directory on its own, because then nobody would notice that
-/// the portable setup is broken.
+/// Order: a folder the user picked earlier (remembered in the pointer file),
+/// otherwise the portable folder next to the application. If the resolved one
+/// does not work, the caller must ask — Fero neither falls back to the home
+/// directory nor quietly moves on to the next candidate, because then nobody
+/// would notice that the intended store is unreachable.
 pub fn resolve_data_dir() -> DataDir {
     let mut cached = RESOLVED_DATA_DIR
         .lock()
@@ -245,42 +267,67 @@ pub fn resolve_data_dir() -> DataDir {
     }
 
     let data_dir = resolve_data_dir_uncached();
-    *cached = Some(data_dir.clone());
+    // A pending setup is not a result worth remembering. The two ways out of it
+    // — connecting the drive, or picking another folder — happen outside this
+    // process, so caching the failure would keep Fero broken until a restart.
+    if data_dir.path().is_some() {
+        *cached = Some(data_dir.clone());
+    }
     data_dir
 }
 
 fn resolve_data_dir_uncached() -> DataDir {
-    let portable = application_dir().map(|dir| dir.join(PORTABLE_DIR_NAME));
+    decide_data_dir(
+        application_dir().map(|dir| dir.join(PORTABLE_DIR_NAME)),
+        load_pointer(),
+    )
+}
 
-    if let Some(candidate) = portable.as_ref() {
-        match is_usable(candidate) {
-            Ok(()) => return DataDir::Portable(candidate.clone()),
-            Err(reason) => {
-                if let Some(chosen) = load_pointer() {
-                    if is_usable(&chosen).is_ok() {
-                        return DataDir::Chosen(chosen);
-                    }
-                }
-                return DataDir::NeedsSetup {
-                    suggestion: candidate.clone(),
-                    reason: format!(
-                        "Der Ordner neben der App ({}) ist nicht nutzbar: {reason}",
-                        candidate.display()
-                    ),
-                };
-            }
+/// The decision itself, with both candidates handed in so it can be tested
+/// without reaching for the executable's location or the user's home.
+fn decide_data_dir(portable: Option<PathBuf>, chosen: Option<PathBuf>) -> DataDir {
+    // A folder the user picked outranks the portable default, and an
+    // unreachable one is reported rather than replaced. Falling back to the
+    // folder next to the app looks harmless and is not: the chosen store stays
+    // behind untouched, the subscriptions in it appear to be gone, and the next
+    // run downloads everything a second time into the other place. Choosing a
+    // location silently is exactly what Fero does not do.
+    if let Some(chosen) = chosen {
+        // Pointing the choice back at the portable folder is not a third state.
+        if portable.as_ref().is_some_and(|candidate| *candidate == chosen)
+            && is_usable(&chosen).is_ok()
+        {
+            return DataDir::Portable(chosen);
         }
+        return match is_usable_as_is(&chosen) {
+            Ok(()) => DataDir::Chosen(chosen),
+            Err(reason) => DataDir::NeedsSetup {
+                reason: format!(
+                    "Der gewählte Datenordner ({}) ist nicht nutzbar: {reason}. \
+                     Bitte das Laufwerk verbinden oder einen anderen Ordner wählen.",
+                    chosen.display()
+                ),
+                suggestion: chosen,
+            },
+        };
     }
 
-    if let Some(chosen) = load_pointer() {
-        if is_usable(&chosen).is_ok() {
-            return DataDir::Chosen(chosen);
-        }
-    }
+    let Some(candidate) = portable else {
+        return DataDir::NeedsSetup {
+            suggestion: PathBuf::from(PORTABLE_DIR_NAME),
+            reason: "Der Ort der Anwendung lässt sich nicht bestimmen.".to_string(),
+        };
+    };
 
-    DataDir::NeedsSetup {
-        suggestion: PathBuf::from(PORTABLE_DIR_NAME),
-        reason: "Der Ort der Anwendung lässt sich nicht bestimmen.".to_string(),
+    match is_usable(&candidate) {
+        Ok(()) => DataDir::Portable(candidate),
+        Err(reason) => DataDir::NeedsSetup {
+            reason: format!(
+                "Der Ordner neben der App ({}) ist nicht nutzbar: {reason}",
+                candidate.display()
+            ),
+            suggestion: candidate,
+        },
     }
 }
 
@@ -309,7 +356,7 @@ pub fn set_data_dir(dir: &Path) -> Result<()> {
     };
     let body = serde_json::to_string_pretty(&pointer)
         .map_err(|error| FeroError::Serialization(error.to_string()))?;
-    std::fs::write(&path, body).map_err(FeroError::from)?;
+    crate::core::atomic::write_atomic(&path, body.as_bytes())?;
 
     let mut cached = RESOLVED_DATA_DIR
         .lock()
@@ -552,6 +599,63 @@ pub fn resolve_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both candidates as real directories, so the probe writes somewhere it
+    /// may. The pointer file and the executable's location stay out of it.
+    fn candidate_dirs(name: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("fero-datadir-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let portable = root.join("Fero-Daten");
+        let chosen = root.join("NAS-Ablage");
+        std::fs::create_dir_all(&portable).expect("portable dir should be creatable");
+        std::fs::create_dir_all(&chosen).expect("chosen dir should be creatable");
+        (portable, chosen)
+    }
+
+    /// The regression: Fero used to prefer the folder next to the app whenever
+    /// it happened to be writable, so a data directory the user had picked (and
+    /// copied their state into) was silently abandoned on the next launch.
+    #[test]
+    fn a_remembered_folder_outranks_a_usable_portable_one() {
+        let (portable, chosen) = candidate_dirs("precedence");
+
+        let resolved = decide_data_dir(Some(portable), Some(chosen.clone()));
+
+        assert_eq!(resolved, DataDir::Chosen(chosen));
+    }
+
+    #[test]
+    fn an_unreachable_remembered_folder_is_reported_instead_of_replaced() {
+        let (portable, chosen) = candidate_dirs("offline");
+        // The shape of an unmounted network volume: the path is gone entirely.
+        std::fs::remove_dir_all(&chosen).expect("chosen dir should be removable");
+
+        let resolved = decide_data_dir(Some(portable), Some(chosen.clone()));
+
+        assert!(matches!(resolved, DataDir::NeedsSetup { .. }));
+        assert!(
+            !chosen.exists(),
+            "a remembered folder must not be created behind the user's back"
+        );
+    }
+
+    #[test]
+    fn without_a_choice_the_portable_folder_answers() {
+        let (portable, _chosen) = candidate_dirs("portable");
+
+        let resolved = decide_data_dir(Some(portable.clone()), None);
+
+        assert_eq!(resolved, DataDir::Portable(portable));
+    }
+
+    #[test]
+    fn choosing_the_portable_folder_itself_stays_portable() {
+        let (portable, _chosen) = candidate_dirs("same");
+
+        let resolved = decide_data_dir(Some(portable.clone()), Some(portable.clone()));
+
+        assert_eq!(resolved, DataDir::Portable(portable));
+    }
 
     /// Der Prüf-Sturm, den dieser Zwischenspeicher abstellt: eine Abo-Liste
     /// fragt einmal je Werk, und fast alle zeigen auf denselben Ordner.
