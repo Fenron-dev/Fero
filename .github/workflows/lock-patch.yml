@@ -1,0 +1,65 @@
+name: Lockfile-Patch
+
+# Schwesterworkflow zu fmt-patch.yml, aus demselben Grund: auf diesem Rechner
+# ist bewusst keine Rust-Toolchain installiert, ein `cargo update` liesse sich
+# also nirgends ausfuehren. Wird gebraucht, sobald `cargo audit` in der CI eine
+# Schwachstelle in einer transitiven Abhaengigkeit meldet.
+#
+#   gh workflow run lock-patch.yml --ref <branch> -f packages=rustls
+#   gh run download <id> -n lock-patch && git apply lock.patch
+#
+# Ohne Angabe laeuft ein allgemeines `cargo update` im Rahmen der in
+# Cargo.toml erlaubten Versionen.
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Pakete, durch Leerzeichen getrennt (leer = alle)"
+        required: false
+        default: ""
+
+jobs:
+  lock-patch:
+    name: cargo update als Patch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust-Toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Aktualisieren und Patch erzeugen
+        run: |
+          if [ -n "${{ inputs.packages }}" ]; then
+            for package in ${{ inputs.packages }}; do
+              echo "::group::cargo update -p $package"
+              cargo update -p "$package"
+              echo "::endgroup::"
+            done
+          else
+            cargo update
+          fi
+          git diff > lock.patch
+          if [ -s lock.patch ]; then
+            echo "Patch erzeugt:"
+            git diff --stat
+          else
+            echo "Nichts zu aktualisieren – kein Patch noetig."
+          fi
+
+      # Der Beweis, dass der Patch taugt, gehoert in denselben Lauf: ein
+      # Lockfile, das nicht mehr uebersetzt, ist schlimmer als ein offener
+      # Hinweis im Audit. Laeuft auch ohne Patch — dann prueft es den Stand.
+      - name: Gegenprobe – uebersetzt und besteht die Tests
+        run: cargo test --all-targets --locked
+
+      - name: Audit mit dem neuen Lockfile
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file Cargo.lock || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lock-patch
+          path: lock.patch
+          if-no-files-found: warn
