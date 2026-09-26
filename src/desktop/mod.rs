@@ -105,20 +105,14 @@ fn ensure_private_dir(dir: &Path) {
 ///
 /// The permissions are applied to a freshly created file **before** the
 /// contents are written, so the secret is never briefly world-readable.
-fn write_private_file(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
+fn write_private_file(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         ensure_private_dir(parent);
     }
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    restrict_to_owner(path, false);
-    file.write_all(contents.as_bytes())
+    // The session store holds login cookies, so it is replaced through the
+    // owner-only variant: the file never exists with wider permissions, not
+    // even for the moment between creating and tightening it.
+    crate::core::atomic::write_atomic_private(path, contents.as_bytes())
 }
 
 const INDEX_HTML: &str = include_str!("../../dist/index.html");
@@ -831,7 +825,7 @@ pub(crate) fn save_schedule_settings(store: &Path, settings: &ScheduleSettings) 
     let body = serde_json::to_string_pretty(settings)
         .map_err(|error| FeroError::Serialization(error.to_string()))?;
     fs::create_dir_all(store).map_err(FeroError::from)?;
-    fs::write(store.join(SCHEDULE_SETTINGS_FILE), body).map_err(FeroError::from)
+    crate::core::atomic::write_atomic(&store.join(SCHEDULE_SETTINGS_FILE), body.as_bytes())
 }
 
 /// File holding the configured download targets, inside Fero's data directory.
@@ -852,7 +846,7 @@ pub(crate) fn save_target_settings(store: &Path, settings: &TargetSettings) -> R
     let body = serde_json::to_string_pretty(settings)
         .map_err(|error| FeroError::Serialization(error.to_string()))?;
     fs::create_dir_all(store).map_err(FeroError::from)?;
-    fs::write(store.join(TARGET_SETTINGS_FILE), body).map_err(FeroError::from)
+    crate::core::atomic::write_atomic(&store.join(TARGET_SETTINGS_FILE), body.as_bytes())
 }
 
 /// Resolves both locations, or reports which one is missing.

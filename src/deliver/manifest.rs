@@ -158,7 +158,7 @@ pub fn save(work_dir: &Path, manifest: &WorkManifest) -> Result<()> {
     let body = serde_json::to_string_pretty(manifest)
         .map_err(|error| FeroError::Serialization(error.to_string()))?;
     std::fs::create_dir_all(work_dir).map_err(FeroError::from)?;
-    std::fs::write(manifest_path(work_dir), body).map_err(FeroError::from)
+    crate::core::atomic::write_atomic(&manifest_path(work_dir), body.as_bytes())
 }
 
 /// Loads the manifest for a work, or starts a fresh one.

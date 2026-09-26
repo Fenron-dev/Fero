@@ -1,5 +1,6 @@
 //! Core business logic for Fero.
 
+pub mod atomic;
 pub mod batching;
 pub mod cbz;
 pub mod epub;

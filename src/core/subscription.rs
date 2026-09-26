@@ -455,7 +455,7 @@ pub fn save_subscription(
     let path = subscription_file_path(system_dir, store, &subscription.id);
     let json = serde_json::to_string_pretty(subscription)
         .map_err(|e| FeroError::Serialization(format!("subscription JSON serialize error: {e}")))?;
-    fs::write(&path, json).map_err(FeroError::from)?;
+    crate::core::atomic::write_atomic(&path, json.as_bytes())?;
     Ok(())
 }
 
@@ -485,8 +485,10 @@ pub fn trash_subscription(
     fs::create_dir_all(&dir).map_err(FeroError::from)?;
     let json = serde_json::to_string_pretty(&subscription)
         .map_err(|e| FeroError::Serialization(format!("subscription serialize error: {e}")))?;
-    fs::write(trashed_file_path(system_dir, store, subscription_id), json)
-        .map_err(FeroError::from)?;
+    crate::core::atomic::write_atomic(
+        &trashed_file_path(system_dir, store, subscription_id),
+        json.as_bytes(),
+    )?;
     fs::remove_file(subscription_file_path(system_dir, store, subscription_id))
         .map_err(FeroError::from)?;
     Ok(Some(subscription))
@@ -665,7 +667,7 @@ pub fn save_user_blocklist(system_dir: &Path, entries: &[BlocklistEntry]) -> Res
     let json = serde_json::to_string_pretty(&user_entries)
         .map_err(|e| FeroError::Serialization(format!("blocklist serialize error: {e}")))?;
     fs::create_dir_all(system_dir).map_err(FeroError::from)?;
-    fs::write(blocklist_file_path(system_dir), json).map_err(FeroError::from)?;
+    crate::core::atomic::write_atomic(&blocklist_file_path(system_dir), json.as_bytes())?;
     Ok(())
 }
 

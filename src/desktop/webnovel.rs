@@ -1600,11 +1600,12 @@ fn check_one_subscription(
         };
         let cache_json = serde_json::to_string(&cached)
             .map_err(|error| FeroError::Serialization(error.to_string()))?;
-        fs::write(
-            cache_dir.join(chapter_cache_name(chapter.index)),
-            cache_json,
-        )
-        .map_err(FeroError::from)?;
+        // A truncated cache entry would fail to parse and block the block
+        // build around it, so this one is replaced atomically as well.
+        crate::core::atomic::write_atomic(
+            &cache_dir.join(chapter_cache_name(chapter.index)),
+            cache_json.as_bytes(),
+        )?;
         chapter.downloaded_at_unix = Some(unix_now());
         chapter.placeholder = is_placeholder;
         if was_placeholder && !is_placeholder {
