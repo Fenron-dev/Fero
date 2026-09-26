@@ -130,10 +130,7 @@ fn temporary_path(path: &Path) -> Result<PathBuf> {
         .and_then(|name| name.to_str())
         .unwrap_or("state");
     let ticket = WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    Ok(parent.join(format!(
-        ".{stem}.fero-tmp-{}-{ticket}",
-        std::process::id()
-    )))
+    Ok(parent.join(format!(".{stem}.fero-tmp-{}-{ticket}", std::process::id())))
 }
 
 // ---------------------------------------------------------------------------

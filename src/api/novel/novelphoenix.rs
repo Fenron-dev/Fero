@@ -35,8 +35,8 @@
 use scraper::{Html, Selector};
 
 use super::{
-    absolutize, extract_content, og_image, sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo,
-    NovelSource, PoliteClient,
+    absolutize, extract_content, og_image, sanitize_to_xhtml, ChapterContent, ChapterRef,
+    NovelInfo, NovelSource, PoliteClient,
 };
 use crate::api::release_date;
 use crate::core::subscription::unix_now;
@@ -188,7 +188,10 @@ fn push_text_without(
     }
     // A paragraph or a line break separates words that would otherwise run
     // into each other once the whitespace is collapsed.
-    if matches!(node.value().as_element().map(|element| element.name()), Some("p" | "br")) {
+    if matches!(
+        node.value().as_element().map(|element| element.name()),
+        Some("p" | "br")
+    ) {
         out.push(' ');
     }
     for child in node.children() {
@@ -427,7 +430,9 @@ mod tests {
     fn chapter_list_page_answers_the_status_too() {
         let html = Html::parse_document(CHAPTERS_PAGE);
         assert_eq!(
-            status_text(&html).as_deref().and_then(completed_from_status),
+            status_text(&html)
+                .as_deref()
+                .and_then(completed_from_status),
             Some(false)
         );
     }
@@ -523,7 +528,9 @@ mod tests {
                <small>Status</small></span></div>"#,
         );
         assert_eq!(
-            status_text(&html).as_deref().and_then(completed_from_status),
+            status_text(&html)
+                .as_deref()
+                .and_then(completed_from_status),
             Some(true)
         );
     }

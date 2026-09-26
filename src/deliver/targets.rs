@@ -294,7 +294,9 @@ fn decide_data_dir(portable: Option<PathBuf>, chosen: Option<PathBuf>) -> DataDi
     // location silently is exactly what Fero does not do.
     if let Some(chosen) = chosen {
         // Pointing the choice back at the portable folder is not a third state.
-        if portable.as_ref().is_some_and(|candidate| *candidate == chosen)
+        if portable
+            .as_ref()
+            .is_some_and(|candidate| *candidate == chosen)
             && is_usable(&chosen).is_ok()
         {
             return DataDir::Portable(chosen);
