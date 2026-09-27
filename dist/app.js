@@ -134,11 +134,14 @@ function sourceHealthFor(hostsField) {
   return null;
 }
 
+/* Ein Katalogeintrag kann mehrere echte Hosts zusammenfassen (z.B. NovelFull
+ * mit vier Domains) — der betroffene Host steht deshalb explizit im Tooltip,
+ * nicht nur "diese Quelle". */
 function sourceHealthTooltip(health) {
   const since = new Date(health.unreachableSinceUnix * 1000).toLocaleString("de-DE");
   const count = health.affected === 1 ? "1 Abo" : `${health.affected} Abos`;
   const reason = health.lastError ? `\n${health.lastError}` : "";
-  return `Nicht erreichbar seit ${since} (${count} betroffen)${reason}`;
+  return `${health.host}: nicht erreichbar seit ${since} (${count} betroffen)${reason}`;
 }
 
 // ── Kleinkram ────────────────────────────────────────────────────────────
