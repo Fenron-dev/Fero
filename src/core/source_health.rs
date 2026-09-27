@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn a_paused_subscription_carries_no_signal() {
-        let now = 10 * DAY;
+        let now = 40 * DAY;
         let samples = vec![sample("example.com", false, true, now - 30 * DAY)];
 
         assert_eq!(unreachable_hosts(&samples, now), Vec::new());
