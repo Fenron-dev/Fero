@@ -150,13 +150,14 @@ function sourceHealthTooltip(health) {
 let pendingStatusTexts = [];
 
 /* Nur die vier Stati, die ueberhaupt aus einem Quelltext folgen koennen:
- * "Unbekannt" waere eine Nullaussage, "Lizenziert" ist laut core::status ein
- * reines Handsignal, das keine Seite fuer sich behaupten darf. */
+ * "Unbekannt" waere eine Nullaussage, "Pausiert" ist eine Tatsache ueber das
+ * Abo (der enabled-Schalter), keine ueber die Serie, und "Lizenziert" ist ein
+ * eigenes Feld, kein Status mehr. */
 const ALIASABLE_STATUS_OPTIONS = [
-  ["ongoing", "Laufend"],
-  ["completed", "Abgeschlossen"],
+  ["laufend", "Laufend"],
+  ["abgeschlossen", "Abgeschlossen"],
   ["hiatus", "Hiatus"],
-  ["dropped", "Abgebrochen"],
+  ["abgebrochen", "Abgebrochen"],
 ];
 
 async function loadPendingStatusTexts() {
@@ -643,24 +644,30 @@ async function refreshSubscriptionsDuringRun(immediate = false) {
   }
 }
 
-/* Der ermittelte Serienstatus. Drei davon aendern, was jemand tun wuerde:
- * lizenziert heisst "jetzt laden, naechste Woche ist es vielleicht weg",
- * abgebrochen heisst "wird nie fertig", Hiatus heisst "nicht kaputt, nur
- * still". Die werden deshalb hervorgehoben. */
+/* Der ermittelte Serienstatus (core::status::SeriesStatus — sechs Werte,
+ * deutsch auf der Leitung, damit Fundus sie ohne Uebersetzung einlesen kann).
+ * Abgebrochen heisst "wird nie fertig", Hiatus heisst "nicht kaputt, nur
+ * still" — die werden deshalb hervorgehoben. "Lizenziert" ist seit 09/2026
+ * kein Status mehr, sondern ein eigenes Feld (item.licensed): eine Serie kann
+ * gleichzeitig laufend *und* lizenziert sein. */
 const STATUS_LABELS = {
-  ongoing: { text: "laufend", tone: "" },
-  completed: { text: "abgeschlossen", tone: "ok" },
+  laufend: { text: "laufend", tone: "" },
+  abgeschlossen: { text: "abgeschlossen", tone: "ok" },
   hiatus: { text: "Hiatus", tone: "warn" },
-  dropped: { text: "abgebrochen", tone: "warn" },
-  licensed: { text: "lizenziert", tone: "warn" },
-  unknown: { text: "", tone: "" },
+  abgebrochen: { text: "abgebrochen", tone: "warn" },
+  pausiert: { text: "pausiert", tone: "" },
+  unbekannt: { text: "unbekannt", tone: "" },
 };
 
 const STATUS_HINTS = {
-  licensed: "Lizenziert — Fan-Übersetzungen verschwinden danach oft innerhalb von Tagen. Jetzt vollständig herunterladen.",
-  dropped: "Von der Übersetzergruppe abgebrochen. Möglicherweise übernimmt eine andere Gruppe.",
-  hiatus: "Pausiert — seit längerem keine neuen Kapitel. Fero sieht weiter nach, nur seltener; kommt etwas, gilt die Serie wieder als laufend.",
+  abgebrochen: "Von der Übersetzergruppe abgebrochen. Möglicherweise übernimmt eine andere Gruppe.",
+  hiatus: "Hiatus — seit längerem keine neuen Kapitel. Fero sieht weiter nach, nur seltener; kommt etwas, gilt die Serie wieder als laufend.",
 };
+
+/* Lizenziert ist ein eigener Hinweis, unabhaengig vom Status-Banner oben —
+ * eine laufende Serie kann trotzdem lizenziert sein. */
+const LICENSED_HINT =
+  "Lizenziert — Fan-Übersetzungen verschwinden danach oft innerhalb von Tagen. Jetzt vollständig herunterladen.";
 
 /* „vor 3 Tagen" statt eines Datums, das man erst im Kopf verrechnen muss.
  * Tage sind die feinste sinnvolle Einheit: die Quellen nennen selbst keine
@@ -717,28 +724,31 @@ const SORTERS = {
   checked: (a, b) => (b.lastCheckUnix || 0) - (a.lastCheckUnix || 0),
   progress: (a, b) =>
     (b.knownChapters - b.downloadedChapters) - (a.knownChapters - a.downloadedChapters),
-  status: (a, b) =>
-    (STATUS_ORDER[statusKey(a)] ?? 9) - (STATUS_ORDER[statusKey(b)] ?? 9) ||
-    a.title.localeCompare(b.title, "de"),
+  status: (a, b) => statusUrgency(a) - statusUrgency(b) || a.title.localeCompare(b.title, "de"),
 };
 
 /* Reihenfolge nach Dringlichkeit, nicht alphabetisch: was Aufmerksamkeit
- * braucht, steht oben. */
+ * braucht, steht oben. Lizenziert schlaegt jeden Status — siehe core::status
+ * —, ist aber kein Status mehr, sondern ein eigenes Feld, das hier extra
+ * geprueft wird. */
 const STATUS_ORDER = {
-  licensed: 0,
-  ongoing: 1,
-  unknown: 2,
+  laufend: 1,
+  unbekannt: 2,
   hiatus: 3,
-  dropped: 4,
-  completed: 5,
-  paused: 6,
+  abgebrochen: 4,
+  abgeschlossen: 5,
+  pausiert: 6,
 };
 
-/* Der eine Zustand, den ein Abo im Blick der Liste hat. „Pausiert" schlaegt
- * alles: ein pausiertes Abo wird nicht geprueft, egal was die Quelle sagt. */
+function statusUrgency(item) {
+  if (item.licensed) return 0;
+  return STATUS_ORDER[statusKey(item)] ?? 9;
+}
+
+/* Der Status kommt seit 09/2026 fertig vom Server: ein pausiertes Abo trägt
+ * bereits seriesStatus "pausiert" (core::status::effective). */
 function statusKey(item) {
-  if (!item.enabled) return "paused";
-  return item.seriesStatus || "unknown";
+  return item.seriesStatus || "unbekannt";
 }
 
 function visibleSubscriptions() {
@@ -747,9 +757,9 @@ function visibleSubscriptions() {
   const state = $("state-filter").value;
   const items = subscriptions.filter((item) => {
     if (kind && item.mediaKind !== kind) return false;
-    if (state === "paused" && item.enabled) return false;
     if (state === "active" && !item.enabled) return false;
-    if (state && state !== "paused" && state !== "active" && statusKey(item) !== state) {
+    if (state === "licensed" && !item.licensed) return false;
+    if (state && state !== "active" && state !== "licensed" && statusKey(item) !== state) {
       return false;
     }
     if (!needle) return true;
@@ -1138,18 +1148,10 @@ function openDetail(id, kind) {
   fact(facts, "Quelle", item.source);
   fact(facts, "Autor", item.author);
   fact(facts, "Kapitel", `${item.downloadedChapters} von ${item.knownChapters} geladen`);
-  const statusEntry = STATUS_LABELS[item.seriesStatus];
-  fact(
-    facts,
-    "Status",
-    statusEntry && statusEntry.text
-      ? statusEntry.text
-      : item.completed
-        ? "abgeschlossen"
-        : item.hiatus
-          ? "Hiatus"
-          : "laufend"
-  );
+  // Der Server liefert seriesStatus immer fertig (effective()), inklusive
+  // "pausiert" — kein Rückfallpfad über completed/hiatus nötig.
+  fact(facts, "Status", STATUS_LABELS[item.seriesStatus]?.text || item.seriesStatus);
+  if (item.licensed) fact(facts, "Lizenziert", "ja");
   if (item.statusOverride) {
     fact(facts, "Status kommt von", "Handeinstellung");
   } else if (item.statusCheckedAt) {
@@ -1191,7 +1193,7 @@ function openDetail(id, kind) {
   }
 
   const banner = $("detail-status-banner");
-  const hint = STATUS_HINTS[item.seriesStatus];
+  const hint = item.licensed ? LICENSED_HINT : STATUS_HINTS[item.seriesStatus];
   banner.textContent = hint || "";
   banner.hidden = !hint;
 
@@ -1213,6 +1215,7 @@ function openDetail(id, kind) {
   $("detail-anilist").hidden = !item.anilistUrl;
   $("detail-mal").hidden = !item.malUrl;
   $("detail-pause").checked = !item.enabled;
+  $("detail-licensed").checked = Boolean(item.licensed);
   renderDetailStatus(item);
   refreshLoginState();
   showView("detail");
@@ -1640,6 +1643,23 @@ $("detail-pause").addEventListener("change", async () => {
     );
   } catch (error) {
     $("detail-pause").checked = !paused;
+    setFeedback($("detail-feedback"), error.message, "error");
+  }
+});
+
+/* Lizenziert ist unabhaengig vom Status (core::status): eine laufende Serie
+ * kann trotzdem lizenziert sein. Kein "auto" wie beim Status-Dropdown — es
+ * ist nur ein Haken. */
+$("detail-licensed").addEventListener("change", async () => {
+  const item = currentItem();
+  if (!item) return;
+  const licensed = $("detail-licensed").checked;
+  try {
+    await post(`${item.kind}/update`, { id: item.id, licensed });
+    await loadSubscriptions();
+    setFeedback($("detail-feedback"), licensed ? "Als lizenziert markiert." : "Markierung entfernt.", "ok");
+  } catch (error) {
+    $("detail-licensed").checked = !licensed;
     setFeedback($("detail-feedback"), error.message, "error");
   }
 });
