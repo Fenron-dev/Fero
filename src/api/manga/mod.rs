@@ -60,6 +60,12 @@ pub struct MangaInfo {
     pub description: Option<String>,
     /// `Some(true)` when the source marks the series as finished.
     pub completed_hint: Option<bool>,
+    /// The status text the source printed, as-is — "Ongoing", "Hiatus", a
+    /// wording `completed_hint` could not resolve to a plain yes/no, or a
+    /// wording nobody has taught Fero yet. `None` only when the source shows
+    /// no status field at all, which most themes this adapter has never seen
+    /// still do not — see `core::status::classify_status_text`.
+    pub source_status_text: Option<String>,
     /// When the newest chapter went up at the source, where the page says so.
     ///
     /// The newest rather than one per chapter: the question this answers is

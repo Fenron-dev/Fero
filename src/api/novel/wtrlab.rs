@@ -123,6 +123,9 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
             .get("status")
             .and_then(Value::as_u64)
             .map(|status| status == STATUS_COMPLETED),
+        // A numeric code, not a wording — there is nothing here for
+        // `classify_status_text`/the alias mechanism to ever be asked about.
+        source_status_text: None,
         latest_release_unix: None,
         // Genres stehen nur als Zahlen auf der Seite, ohne Namenstabelle
         // daneben — anders als die Tags. Eine Id ins Regal zu schreiben waere

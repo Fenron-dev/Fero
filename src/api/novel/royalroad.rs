@@ -74,6 +74,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
     // "COMPLETED" appears as a status label on finished fictions.
     let completed_hint = extract_content(&html, &["div.fiction-info", "div.fic-header"])
         .map(|info| info.to_uppercase().contains(">COMPLETED<"));
+    let status_text = status_label(&html);
 
     let chapter_selector = Selector::parse("table#chapters a[href*='/chapter/']")
         .map_err(|e| FeroError::ExternalApi(format!("selector parse error: {e}")))?;
@@ -112,11 +113,28 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
         cover_url,
         description,
         completed_hint,
+        source_status_text: status_text,
         latest_release_unix: None,
         genres: Vec::new(),
         tags,
         chapters,
     })
+}
+
+/// RoyalRoad's own life-cycle label ("ONGOING", "COMPLETED", "HIATUS",
+/// "STUB", "DROPPED"), from a `span.label` next to the fiction tags.
+///
+/// The status label shares its class with every tag chip ("Adventure",
+/// "Fantasy", …) — nothing in the markup marks it apart structurally, so this
+/// keeps only the one whose *text* is one of RoyalRoad's five known words,
+/// rather than trying to out-guess the CSS.
+fn status_label(html: &Html) -> Option<String> {
+    const KNOWN: [&str; 5] = ["ongoing", "completed", "hiatus", "stub", "dropped"];
+    let selector = Selector::parse("span.label").ok()?;
+    html.select(&selector)
+        .filter(|element| !element.value().classes().any(|class| class == "fiction-tag"))
+        .map(|element| element_text(&element))
+        .find(|text| KNOWN.contains(&text.to_lowercase().as_str()))
 }
 
 /// All matching elements' trimmed text contents.
@@ -217,6 +235,33 @@ mod tests {
             info.chapters[0].url,
             "https://www.royalroad.com/fiction/1/f/chapter/100/one"
         );
+    }
+
+    /// Trimmed copy of a real fiction page's tag row: the status label and
+    /// the genre/tag chips share the exact same `label` classes and differ
+    /// only in the extra `fiction-tag` class the chips carry.
+    const TAG_ROW: &str = r#"
+    <html><body>
+      <span class="label label-default label-sm bg-blue-hoki">Original</span>
+      <span class="label label-default label-sm bg-blue-hoki">
+          COMPLETED
+      </span>
+      <span class="label label-default label-sm bg-blue-dark fiction-tag">Adventure</span>
+      <span class="label label-default label-sm bg-blue-dark fiction-tag">Fantasy</span>
+    </body></html>"#;
+
+    #[test]
+    fn status_label_picks_the_known_word_not_a_tag_chip() {
+        let html = Html::parse_document(TAG_ROW);
+        assert_eq!(status_label(&html).as_deref(), Some("COMPLETED"));
+    }
+
+    #[test]
+    fn status_label_answers_none_without_a_known_word() {
+        let html = Html::parse_document(
+            r#"<span class="label fiction-tag">Adventure</span><span class="label">Original</span>"#,
+        );
+        assert_eq!(status_label(&html), None);
     }
 
     #[test]

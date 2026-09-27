@@ -129,7 +129,9 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
             .or_else(|| first_text(&html, "[itemprop='description']")),
         latest_release_unix,
         completed_hint: first_text(&html, ".status, .imptdt i")
+            .as_deref()
             .map(|status| status.to_lowercase().contains("completed")),
+        source_status_text: first_text(&html, ".status, .imptdt i"),
         genres: collect_texts(&html, ".mgen a, .seriestugenre a"),
         tags: Vec::new(),
         right_to_left: false,

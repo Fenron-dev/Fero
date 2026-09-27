@@ -132,6 +132,7 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
             .map(|url| absolutize(page_url, &url)),
         description: first_text(html, ".summary .content"),
         completed_hint,
+        source_status_text: (!status.is_empty()).then_some(status),
         latest_release_unix: None,
         genres: collect_texts(html, ".categories .property-item"),
         tags: Vec::new(),

@@ -96,6 +96,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     chapters.reverse();
 
     let detail = collect_detail_text(&html);
+    let status = labeled_value(&detail, "status");
     Ok(MangaInfo {
         title,
         author: labeled_value(&detail, "author"),
@@ -105,8 +106,10 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         description: first_text(&html, "#show")
             .or_else(|| first_text(&html, ".detail_info .summary"))
             .map(|text| text.trim_end_matches("Show less").trim().to_string()),
-        completed_hint: labeled_value(&detail, "status")
+        completed_hint: status
+            .as_deref()
             .map(|status| status.to_lowercase().contains("completed")),
+        source_status_text: status,
         genres: collect_texts(&html, ".detail_info li a[href*='/directory/']"),
         tags: Vec::new(),
         // MangaTown hosts Japanese manga; scanlations keep the original

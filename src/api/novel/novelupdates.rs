@@ -134,6 +134,13 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<NovelInfo> {
         cover_url,
         description,
         completed_hint,
+        // Not a life-cycle wording: `completed_hint` here reads "fully
+        // translated" (#showtranslated says Yes/No), a different question
+        // that `refresh_series_status` already asks NovelUpdates properly for
+        // hosts subscribed directly through it. Feeding "Yes"/"No" through
+        // the classifier/alias path would just prompt the user to classify
+        // something that was never a status word.
+        source_status_text: None,
         latest_release_unix,
         genres: collect_texts(&html, "#seriesgenre a"),
         tags: collect_texts(&html, "#showtags a"),

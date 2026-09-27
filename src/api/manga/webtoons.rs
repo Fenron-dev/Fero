@@ -160,6 +160,9 @@ fn parse_list_page(page_url: &str, body: &str) -> Result<MangaInfo> {
             .map(|src| absolutize(page_url, &src)),
         description: first_text(&html, ".detail_body .summary"),
         completed_hint: first_text(&html, ".detail_header .txt_ico_completed").map(|_| true),
+        // An icon, not a word — Webtoons has nothing here for
+        // `classify_status_text`/the alias mechanism to be asked about.
+        source_status_text: None,
         genres: collect_texts(&html, ".detail_header .genre"),
         tags: Vec::new(),
         // Webtoons are read top-to-bottom, left-to-right.

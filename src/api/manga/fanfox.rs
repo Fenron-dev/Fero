@@ -173,6 +173,7 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         description: first_text(&html, ".fullcontent")
             .or_else(|| first_text(&html, ".detail-info-right-content")),
         completed_hint: Some(status_text.to_lowercase().contains("completed")),
+        source_status_text: (!status_text.is_empty()).then_some(status_text),
         genres: collect_texts(&html, ".detail-info-right-tag-list a"),
         tags: Vec::new(),
         latest_release_unix: None,

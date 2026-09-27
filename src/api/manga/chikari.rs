@@ -97,6 +97,7 @@ impl MangaSource for ChikariSource {
             cover_url: detail.cover_url,
             description: detail.description,
             completed_hint: completed_hint(detail.status.as_deref()),
+            source_status_text: detail.status,
             latest_release_unix,
             genres: detail.genres.into_iter().map(|value| value.name).collect(),
             tags: detail

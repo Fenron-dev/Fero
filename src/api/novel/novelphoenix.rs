@@ -93,9 +93,9 @@ impl NovelSource for NovelPhoenixSource {
             // The list page repeats the status in markup of its own. Reading it
             // as a fallback means a redesign of one page still leaves the other.
             if info.completed_hint.is_none() {
-                info.completed_hint = status_text(&page_html)
-                    .as_deref()
-                    .and_then(completed_from_status);
+                let fallback = status_text(&page_html);
+                info.completed_hint = fallback.as_deref().and_then(completed_from_status);
+                info.source_status_text = info.source_status_text.take().or(fallback);
             }
             if page >= last_pagination_page(&page_html).min(MAX_TOC_PAGES) {
                 break;
@@ -138,13 +138,15 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
     let title = first_text(html, "h1.novel-title")
         .or_else(|| first_text(html, "h1"))
         .ok_or_else(|| FeroError::ExternalApi(format!("Novel-Titel nicht gefunden: {page_url}")))?;
+    let status = status_text(html);
 
     Ok(NovelInfo {
         title,
         author: first_text(html, ".author a").or_else(|| first_text(html, "[itemprop='author']")),
         cover_url: og_image(html).map(|src| absolutize(page_url, &src)),
         description: summary_text(html),
-        completed_hint: status_text(html).as_deref().and_then(completed_from_status),
+        completed_hint: status.as_deref().and_then(completed_from_status),
+        source_status_text: status,
         // Filled while walking the chapter list, where the dates are.
         latest_release_unix: None,
         genres: collect_link_texts(html, ".categories ul li a"),
@@ -493,6 +495,7 @@ mod tests {
         assert_eq!(info.title, "MAGUS INFINITE");
         assert_eq!(info.author.as_deref(), Some("BRICKTRADER"));
         assert_eq!(info.completed_hint, Some(false));
+        assert_eq!(info.source_status_text.as_deref(), Some("Ongoing"));
         assert_eq!(
             info.cover_url.as_deref(),
             Some("https://novelphoenix.com/server-1/magus.jpg")

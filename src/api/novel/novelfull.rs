@@ -105,7 +105,9 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
     let author = info_row_values(html, "Author:").into_iter().next();
     let genres = info_row_values(html, "Genre:");
     let status = info_row_values(html, "Status:").into_iter().next();
-    let completed_hint = status.map(|status| status.to_lowercase().contains("completed"));
+    let completed_hint = status
+        .as_deref()
+        .map(|status| status.to_lowercase().contains("completed"));
 
     let chapters = parse_chapter_links(page_url, html);
     if chapters.is_empty() {
@@ -120,6 +122,7 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
         cover_url,
         description,
         completed_hint,
+        source_status_text: status,
         latest_release_unix: None,
         genres,
         tags: Vec::new(),

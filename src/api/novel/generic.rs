@@ -204,6 +204,7 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
         description: meta_content(&html, "og:description")
             .or_else(|| meta_content(&html, "description")),
         completed_hint: None,
+        source_status_text: None,
         latest_release_unix: None,
         genres: Vec::new(),
         tags: Vec::new(),

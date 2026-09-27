@@ -122,6 +122,8 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
     chapters.reverse();
     super::sort_chapters_by_number(&mut chapters);
 
+    let status = series_status(&html);
+
     Ok(MangaInfo {
         title,
         author: first_text(&html, ".author-content a"),
@@ -130,10 +132,11 @@ fn parse_series_page(page_url: &str, body: &str) -> Result<MangaInfo> {
         description: first_text(&html, ".summary__content")
             .or_else(|| first_text(&html, ".description-summary")),
         latest_release_unix,
-        completed_hint: series_status(&html).map(|status| {
+        completed_hint: status.as_deref().map(|status| {
             let lower = status.to_lowercase();
             lower.contains("completed") || lower.contains("finished")
         }),
+        source_status_text: status,
         genres: collect_texts(&html, ".genres-content a"),
         tags: Vec::new(),
         // Madara hosts manga, manhua and manhwa alike; manhua/manhwa read

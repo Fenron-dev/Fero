@@ -108,6 +108,7 @@ fn parse_novel_page(page_url: &str, html: &Html) -> Result<NovelInfo> {
         description: first_text(html, ".m-desc .txt .inner")
             .or_else(|| meta_content(html, "og:description")),
         completed_hint,
+        source_status_text: (!status.is_empty()).then_some(status),
         latest_release_unix: None,
         genres,
         tags: Vec::new(),

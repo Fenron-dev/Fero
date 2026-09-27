@@ -64,6 +64,7 @@ impl NovelSource for ChikariSource {
             cover_url: detail.cover_url,
             description: detail.description,
             completed_hint: completed_hint(detail.status.as_deref()),
+            source_status_text: detail.status,
             latest_release_unix: None,
             genres: detail.genres.into_iter().map(|genre| genre.name).collect(),
             tags: detail.tags.into_iter().map(|tag| tag.name).collect(),
