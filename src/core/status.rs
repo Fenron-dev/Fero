@@ -603,8 +603,20 @@ mod tests {
     /// every status — even a licensed one.
     #[test]
     fn a_disabled_subscription_is_never_checked() {
-        assert!(!should_check(SeriesStatus::Ongoing, false, false, None, 1_000));
-        assert!(!should_check(SeriesStatus::Ongoing, true, false, None, 1_000));
+        assert!(!should_check(
+            SeriesStatus::Ongoing,
+            false,
+            false,
+            None,
+            1_000
+        ));
+        assert!(!should_check(
+            SeriesStatus::Ongoing,
+            true,
+            false,
+            None,
+            1_000
+        ));
     }
 
     /// The whole reason `status_override` exists: a hand setting that the next
