@@ -5,6 +5,7 @@ pub mod batching;
 pub mod cbz;
 pub mod epub;
 pub mod manga;
+pub mod source_health;
 pub mod status;
 pub mod subscription;
 pub mod vault;

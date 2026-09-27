@@ -186,6 +186,15 @@ pub struct Subscription {
     /// UNIX timestamp of the last completed update check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_check_unix: Option<u64>,
+    /// UNIX timestamp the source's overview page was last reachable.
+    ///
+    /// Distinct from `last_check_unix`, which advances on every attempt,
+    /// success or failure. This one only advances when the fetch actually
+    /// succeeded — it is what `core::source_health` measures how long a
+    /// *current* failure has lasted against, and how it tells a whole site
+    /// being down apart from one title on it having moved or been pulled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_unix: Option<u64>,
     /// Human-readable error from the last failed check, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -281,6 +290,7 @@ impl Subscription {
             latest_release_unix: None,
             known_chapters: Vec::new(),
             last_check_unix: None,
+            last_success_unix: None,
             last_error: None,
             created_at_unix: unix_now(),
             trashed_at_unix: None,

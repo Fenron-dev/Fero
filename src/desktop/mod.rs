@@ -65,6 +65,7 @@ impl_outcome!(
     OpenExternalResponse,
     TargetsResponse,
     SimpleResponse,
+    SourceHealthResponse,
 );
 const LEGACY_SYSTEM_DIR: &str = ".mediashelf";
 /// In-vault trash folder; deleted files move here (reversible) preserving
@@ -957,6 +958,56 @@ fn build_targets_response() -> TargetsResponse {
         fallback: settings.fallback.clone(),
         error: None,
         copied_entries: None,
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceHealthResponse {
+    hosts: Vec<crate::core::source_health::UnreachableHost>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Reports every host on which *all* enabled subscriptions are currently
+/// failing, for the warning icon in the Quellen view.
+///
+/// Reads both stores directly rather than through `webnovel`/`manga`'s own
+/// list responses: those attach per-subscription UI fields (cover, target
+/// resolution, …) that this aggregation has no use for, at the cost of file
+/// system work this endpoint does not need.
+fn build_source_health_response() -> SourceHealthResponse {
+    let ws = match resolve_workspace(None) {
+        Ok(ws) => ws,
+        Err(message) => {
+            return SourceHealthResponse {
+                hosts: Vec::new(),
+                error: Some(message),
+            }
+        }
+    };
+
+    let webnovels = list_subscriptions(&ws.store).unwrap_or_default();
+    let mangas = crate::core::manga::list_subscriptions(&ws.store).unwrap_or_default();
+
+    let samples: Vec<crate::core::source_health::HostSample> = webnovels
+        .iter()
+        .chain(mangas.iter())
+        .filter_map(|subscription| {
+            Some(crate::core::source_health::HostSample {
+                host: host_of(&subscription.url)?,
+                enabled: subscription.enabled,
+                last_error: subscription.last_error.clone(),
+                last_seen_reachable_unix: subscription
+                    .last_success_unix
+                    .unwrap_or(subscription.created_at_unix),
+            })
+        })
+        .collect();
+
+    SourceHealthResponse {
+        hosts: crate::core::source_health::unreachable_hosts(&samples, unix_now()),
+        error: None,
     }
 }
 

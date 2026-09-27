@@ -474,6 +474,15 @@ body {
   color: var(--text);
 }
 
+/* Alle aktiven Abos dieses Hosts scheitern seit mindestens einem Tag —
+ * siehe core::source_health. Der Titel-Tooltip trägt Fehler und Datum. */
+.source-health-warning {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--danger);
+  cursor: help;
+}
+
 .source-actions {
   display: flex;
   gap: 6px;

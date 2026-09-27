@@ -51,6 +51,7 @@ const GET_ROUTES: &[&str] = &[
     "/styles.css",
     "/api/cover",
     "/api/targets",
+    "/api/source-health",
     "/api/schedule",
     "/api/platform-search",
     "/api/anilist-search",
@@ -140,6 +141,10 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         "/api/targets" => {
             json_outcome(&build_targets_response(), StatusCode::INTERNAL_SERVER_ERROR)
         }
+        "/api/source-health" => json_outcome(
+            &build_source_health_response(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
         "/api/targets/save" => json_outcome(
             &build_save_targets_response(request.body()),
             StatusCode::BAD_REQUEST,
