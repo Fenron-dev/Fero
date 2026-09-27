@@ -32,6 +32,19 @@ const selectedSubscriptionKeys = new Set();
 let selectionMode = false;
 let longPressTimer = null;
 
+/* Jedes fertig geprüfte Abo wird sofort auf der Platte gespeichert (siehe
+ * run_webnovel_check) — nur die Liste in der Oberfläche wartete bisher bis
+ * zum Ende des ganzen Laufs. Bei 800+ Abos wäre "jedes Mal neu laden" trotzdem
+ * falsch: /api/webnovel/list liest jede Abo-Datei einzeln von der Platte.
+ * Deshalb ein Mindestabstand zwischen zwei echten Nachladevorgängen — ein
+ * Titelwechsel im Job löst den Wunsch aus, die Uhr entscheidet, wann er
+ * tatsächlich stattfindet. */
+const SUBSCRIPTIONS_REFRESH_MIN_INTERVAL_MS = 5000;
+let lastSubscriptionsRefreshAt = 0;
+let subscriptionsRefreshInFlight = false;
+let subscriptionsRefreshPending = false;
+let subscriptionsRefreshTimer = null;
+
 const TABLE_COLUMNS = [
   ["title", "Titel"], ["type", "Typ"], ["source", "Quelle"],
   ["author", "Autor"], ["genres", "Genres"], ["tags", "Tags"],
@@ -91,6 +104,42 @@ const SOURCE_TABLE_COLUMNS = [
 const DEFAULT_SOURCE_TABLE_COLUMNS = ["name", "hosts", "url", "note", "actions"];
 let sourceTableColumns = JSON.parse(localStorage.getItem("fero.sourceTableColumns") || "null") || DEFAULT_SOURCE_TABLE_COLUMNS;
 let sourceTableSort = { key: null, direction: 1 };
+
+/* Host -> { affected, unreachableSinceUnix, lastError }, aus /api/source-health.
+ * Nur Hosts, bei denen *alle* aktiven Abos gerade fehlschlagen und das schon
+ * seit mindestens einem Tag — siehe core::source_health. */
+let sourceHealthByHost = new Map();
+
+async function loadSourceHealth() {
+  try {
+    const data = await api("source-health");
+    sourceHealthByHost = new Map((data.hosts || []).map((entry) => [entry.host, entry]));
+  } catch (error) {
+    // Ein Fehlschlag hier ist kein Grund, die Quellenansicht zu verweigern —
+    // es fehlen dann nur die Warnsymbole.
+    sourceHealthByHost = new Map();
+  }
+}
+
+/* `source.hosts` ist eine Klartext-Liste wie "novelfull.com · novgo.net";
+ * der erste Treffer (exakt oder als Subdomain) liefert den Befund. */
+function sourceHealthFor(hostsField) {
+  if (!hostsField || sourceHealthByHost.size === 0) return null;
+  const candidates = hostsField.split("·").map((part) => part.trim()).filter(Boolean);
+  for (const [host, entry] of sourceHealthByHost) {
+    if (candidates.some((candidate) => host === candidate || host.endsWith(`.${candidate}`))) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+function sourceHealthTooltip(health) {
+  const since = new Date(health.unreachableSinceUnix * 1000).toLocaleString("de-DE");
+  const count = health.affected === 1 ? "1 Abo" : `${health.affected} Abos`;
+  const reason = health.lastError ? `\n${health.lastError}` : "";
+  return `Nicht erreichbar seit ${since} (${count} betroffen)${reason}`;
+}
 
 // ── Kleinkram ────────────────────────────────────────────────────────────
 
@@ -346,6 +395,7 @@ function renderSourceTable(entries, list) {
   }
   for (const source of sorted) {
     const row = document.createElement("tr");
+    const health = sourceHealthFor(source.hosts);
     for (const [key] of columns) {
       const cell = document.createElement("td");
       if (key === "name" && source.url) {
@@ -365,6 +415,11 @@ function renderSourceTable(entries, list) {
         cell.appendChild(actions);
       } else {
         cell.textContent = sourceTableValue(source, key);
+      }
+      if (key === "name" && health) {
+        const warning = el("span", "source-health-warning", "⚠");
+        warning.title = sourceHealthTooltip(health);
+        cell.appendChild(warning);
       }
       row.appendChild(cell);
     }
@@ -398,7 +453,14 @@ document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => {
     const view = item.dataset.view;
     showView(view);
-    if (view === "sources") showSourceKind("webnovel");
+    if (view === "sources") {
+      showSourceKind("webnovel");
+      // Erst zeigen, dann die Warnsymbole nachreichen — das Laden der
+      // Katalogtabelle soll nicht auf einen Netzwerkaufruf warten.
+      loadSourceHealth().then(() =>
+        showSourceKind(document.querySelector(".source-tab.is-active")?.dataset.sourceKind || "webnovel")
+      );
+    }
     if (view === "settings") {
       loadTargets();
       loadSchedule();
@@ -448,6 +510,46 @@ async function loadSubscriptions() {
 
   $("nav-count-subscriptions").textContent = subscriptions.length || "";
   renderSubscriptions();
+}
+
+/* Hält die Liste (und eine offene Detailansicht) während eines laufenden
+ * Prüflaufs auf dem Stand der Platte, ohne ihn durch ständiges Neuladen
+ * auszubremsen: höchstens alle SUBSCRIPTIONS_REFRESH_MIN_INTERVAL_MS ein
+ * echter Aufruf, egal wie oft der Job zwischendurch das Abo wechselt. Ein
+ * Aufruf, während der vorige noch läuft, merkt sich das als "danach noch
+ * einmal" statt sich zu überlappen. */
+async function refreshSubscriptionsDuringRun(immediate = false) {
+  if (subscriptionsRefreshInFlight) {
+    subscriptionsRefreshPending = true;
+    return;
+  }
+  const elapsed = Date.now() - lastSubscriptionsRefreshAt;
+  if (!immediate && elapsed < SUBSCRIPTIONS_REFRESH_MIN_INTERVAL_MS) {
+    if (!subscriptionsRefreshTimer) {
+      subscriptionsRefreshTimer = setTimeout(() => {
+        subscriptionsRefreshTimer = null;
+        refreshSubscriptionsDuringRun(true);
+      }, SUBSCRIPTIONS_REFRESH_MIN_INTERVAL_MS - elapsed);
+    }
+    return;
+  }
+  if (subscriptionsRefreshTimer) {
+    clearTimeout(subscriptionsRefreshTimer);
+    subscriptionsRefreshTimer = null;
+  }
+  subscriptionsRefreshInFlight = true;
+  subscriptionsRefreshPending = false;
+  lastSubscriptionsRefreshAt = Date.now();
+  try {
+    await loadSubscriptions();
+    if (currentDetailId) openDetail(currentDetailId, currentDetailKind);
+  } catch (error) {
+    // Ein Fehlschlag hier darf den laufenden Job nicht unterbrechen; der
+    // naechste planmaessige oder abschliessende Reload holt es nach.
+  } finally {
+    subscriptionsRefreshInFlight = false;
+    if (subscriptionsRefreshPending) refreshSubscriptionsDuringRun(true);
+  }
 }
 
 /* Der ermittelte Serienstatus. Drei davon aendern, was jemand tun wuerde:
@@ -1571,6 +1673,7 @@ function runJob(kind, jobId) {
       resolve(outcome);
     };
 
+    let lastRunningTitle = null;
     const tick = async () => {
       let data;
       try {
@@ -1585,6 +1688,17 @@ function runJob(kind, jobId) {
       if (!job) return;
 
       renderJobBanner([{ kind, jobId, status: job }]);
+
+      // Der Job wechselt das Titelfeld, sobald das vorige Abo gespeichert ist
+      // (siehe run_webnovel_check) — das ist das fruehestmoegliche Signal,
+      // dass es in der Liste einen neuen Stand gibt.
+      if (job.state === "running") {
+        const title = jobTitle(job);
+        if (title && title !== lastRunningTitle) {
+          lastRunningTitle = title;
+          refreshSubscriptionsDuringRun();
+        }
+      }
 
       if (job.state !== "running") {
         if (job.state === "failed") status(job.message || "Lauf fehlgeschlagen.", true);
@@ -1645,6 +1759,11 @@ function renderJobBanner(jobs) {
   stop.textContent = cancelling ? "wird beendet …" : "Stoppen";
 }
 
+/* Letzter gesehener Job-Titel je Engine, fuer denselben Signalweg wie in
+ * runJob — nur hier fuer Laeufe, die der Zeitplan im Hintergrund startet und
+ * die niemand mit einem Klick begleitet. */
+const backgroundJobTitles = new Map();
+
 async function pollBackgroundJobs() {
   if (activeJob || backgroundPollInFlight) return;
   backgroundPollInFlight = true;
@@ -1660,8 +1779,23 @@ async function pollBackgroundJobs() {
         return null;
       }
     }));
+    const previousKinds = new Set(backgroundJobs.keys());
     backgroundJobs.clear();
-    for (const entry of found.filter(Boolean)) backgroundJobs.set(entry.kind, entry);
+    for (const entry of found.filter(Boolean)) {
+      backgroundJobs.set(entry.kind, entry);
+      previousKinds.delete(entry.kind);
+      const title = jobTitle(entry.status);
+      if (title && backgroundJobTitles.get(entry.kind) !== title) {
+        backgroundJobTitles.set(entry.kind, title);
+        refreshSubscriptionsDuringRun();
+      }
+    }
+    // Eine Engine, die beim vorigen Poll noch lief und jetzt fehlt, ist gerade
+    // fertig geworden — dafuer lohnt sich der sofortige statt der geplante Reload.
+    for (const kind of previousKinds) {
+      backgroundJobTitles.delete(kind);
+      refreshSubscriptionsDuringRun(true);
+    }
     if (!activeJob) renderJobBanner([...backgroundJobs.values()]);
   } finally {
     backgroundPollInFlight = false;
