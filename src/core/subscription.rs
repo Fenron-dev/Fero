@@ -118,6 +118,15 @@ pub struct Subscription {
     /// serial back up years later.
     #[serde(default)]
     pub dropped: bool,
+    /// Licensed — a fan translation is likely to disappear soon.
+    ///
+    /// Orthogonal to the life-cycle status above: a work can be `Ongoing`
+    /// *and* licensed, and licensing does not change when new chapters
+    /// eventually mark it `Completed`. Set one-way from NovelUpdates, same as
+    /// `completed`/`hiatus`/`dropped`, and toggleable by hand — there is no
+    /// override lock for it, since there is nothing to be locked out of.
+    #[serde(default)]
+    pub licensed: bool,
     /// Paused subscriptions are skipped by checks but keep their data.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -292,6 +301,7 @@ impl Subscription {
             completed: false,
             hiatus: false,
             dropped: false,
+            licensed: false,
             enabled: true,
             series_status: SeriesStatus::Unknown,
             status_override: None,
@@ -314,12 +324,14 @@ impl Subscription {
         }
     }
 
-    /// The status that applies, hand setting first.
+    /// The status that applies, hand setting first — and a paused
+    /// subscription first of all.
     ///
-    /// The one place the three possible answers are reconciled; see
+    /// The one place the four possible answers are reconciled; see
     /// [`crate::core::status::effective`] for the precedence and why.
     pub fn effective_status(&self) -> SeriesStatus {
         crate::core::status::effective(
+            self.enabled,
             self.status_override,
             self.series_status,
             self.completed,
@@ -345,7 +357,10 @@ impl Subscription {
             SeriesStatus::Completed => self.completed = true,
             SeriesStatus::Hiatus => self.hiatus = true,
             SeriesStatus::Dropped => self.dropped = true,
-            SeriesStatus::Ongoing | SeriesStatus::Licensed | SeriesStatus::Unknown => {}
+            // Paused is a subscription fact, not something a source's text
+            // ever asserts, so it never reaches this function in practice —
+            // matched anyway because the enum has to be handled exhaustively.
+            SeriesStatus::Ongoing | SeriesStatus::Paused | SeriesStatus::Unknown => {}
         }
     }
 
@@ -820,14 +835,19 @@ mod tests {
         assert!(!sub.reopen());
     }
 
-    /// A licensed serial keeps releasing until the takedown: reopening it
-    /// would throw away the one status that says "download now".
+    /// Licensing is orthogonal to the life-cycle status: new chapters proving
+    /// a serial is still running say nothing about whether the translation is
+    /// about to disappear, so `reopen()` must leave the flag alone.
     #[test]
-    fn reopen_leaves_the_fast_lane_statuses_alone() {
+    fn reopen_does_not_touch_licensed() {
         let mut sub = Subscription::new("https://example.com/x", "novelupdates", "X");
-        sub.series_status = SeriesStatus::Licensed;
-        assert!(!sub.reopen());
-        assert_eq!(sub.effective_status(), SeriesStatus::Licensed);
+        sub.completed = true;
+        sub.licensed = true;
+
+        assert!(sub.reopen());
+
+        assert!(sub.licensed, "reopen must not clear an unrelated fact");
+        assert_eq!(sub.effective_status(), SeriesStatus::Ongoing);
     }
 
     #[test]
@@ -853,6 +873,16 @@ mod tests {
         sub.apply_source_status(SeriesStatus::Ongoing);
 
         assert!(sub.completed, "Ongoing must not silently undo Completed");
+    }
+
+    #[test]
+    fn pausing_the_subscription_outranks_the_life_cycle_status() {
+        let mut sub = Subscription::new("https://example.com/x", "novelphoenix", "X");
+        sub.status_override = Some(SeriesStatus::Completed);
+
+        sub.enabled = false;
+
+        assert_eq!(sub.effective_status(), SeriesStatus::Paused);
     }
 
     #[test]

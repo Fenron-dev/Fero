@@ -14,40 +14,67 @@ use serde::{Deserialize, Serialize};
 use crate::api::novel::status::{OriginalStatus, SeriesStatusFacts};
 
 /// How a serial stands, as far as Fero can tell.
+///
+/// The wire values are German on purpose: this is the one enum that leaves
+/// Fero verbatim — into the subscription file, into `fero.info.json`, into
+/// the API — for Fundus to read directly, and it reads exactly the six words
+/// a person picking this apart would use. `#[serde(alias = "…")]` keeps a
+/// subscription written before 09/2026 (English wire values, plus a
+/// `"licensed"` that was a status back then) loading correctly; every fresh
+/// write uses the new name. Losing that would mean an upgrade makes existing
+/// subscriptions unparsable — and an unparsable one does not error, it just
+/// silently disappears from the list (`list_subscriptions` skips what it
+/// cannot read), which is worse than any wrong label.
+///
+/// `Licensed` is deliberately not a variant here any more — see
+/// [`Subscription::licensed`](crate::core::subscription::Subscription::licensed):
+/// it is a fact that coexists with any of these six, not a seventh one that
+/// excludes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum SeriesStatus {
     /// Still receiving chapters.
+    #[serde(rename = "laufend", alias = "ongoing", alias = "licensed")]
     Ongoing,
     /// Finished: original done, translation done, and everything is here.
+    #[serde(rename = "abgeschlossen", alias = "completed")]
     Completed,
-    /// Paused upstream.
+    /// Paused upstream, no announced end — a fact about the *series*.
+    #[serde(rename = "hiatus")]
     Hiatus,
     /// Abandoned upstream.
+    #[serde(rename = "abgebrochen", alias = "dropped")]
     Dropped,
-    /// Licensed — the translation is likely to disappear.
-    Licensed,
-    /// Not determined yet.
+    /// The user paused this *subscription* — Fero currently checks nothing
+    /// here. Not a fact about the series (a paused subscription can be
+    /// running fine upstream); wins over every other value the moment
+    /// `enabled` is false, computed in [`effective`] rather than stored.
+    #[serde(rename = "pausiert")]
+    Paused,
+    /// Not determined yet — or genuinely ambiguous: the source gives no
+    /// reliable signal for whether the serial is still continuing or was
+    /// quietly dropped.
     #[default]
+    #[serde(rename = "unbekannt", alias = "unknown")]
     Unknown,
 }
 
 impl SeriesStatus {
     /// Whether this status warrants telling the user about it unprompted.
     ///
-    /// The three that change what someone would do: a licensed serial should be
-    /// downloaded *now*, a dropped one will never finish, a paused one is not
-    /// broken but idle.
+    /// The two that change what someone would do: a dropped one will never
+    /// finish, a paused-upstream one is not broken but idle. `Licensed` used
+    /// to be a third — see [`Subscription::licensed`]; a caller that needs
+    /// that signal now checks it directly rather than through the status.
+    ///
+    /// [`Subscription::licensed`]: crate::core::subscription::Subscription::licensed
     pub fn needs_attention(self) -> bool {
-        matches!(self, Self::Licensed | Self::Dropped | Self::Hiatus)
+        matches!(self, Self::Dropped | Self::Hiatus)
     }
 
     /// Whether periodic checks can be skipped.
     ///
     /// Only a finished serial qualifies. A dropped one might still get picked
-    /// up by another translator, and a licensed one may keep releasing until
-    /// the takedown — stopping the checks would miss exactly the chapters that
-    /// matter most.
+    /// up by another translator.
     pub fn is_settled(self) -> bool {
         self == Self::Completed
     }
@@ -58,8 +85,9 @@ impl SeriesStatus {
     /// The three statuses that mean "nothing is coming, probably". *Probably*
     /// is why they are checked at all: translators pick a dropped series up
     /// years later, a hiatus ends, and a finished work grows a sequel arc in
-    /// the same entry. `Licensed` deliberately stays in the fast lane — it is
-    /// the one status where a missed run costs chapters that never come back.
+    /// the same entry. A licensed serial staying in the fast lane — the one
+    /// status where a missed run costs chapters that never come back — is now
+    /// the caller's job: see [`should_check`], which takes that as its own flag.
     pub fn checks_rarely(self) -> bool {
         matches!(self, Self::Completed | Self::Dropped | Self::Hiatus)
     }
@@ -70,24 +98,28 @@ impl SeriesStatus {
     /// picks in a dropdown, and it has to come back in.
     pub fn as_id(self) -> &'static str {
         match self {
-            Self::Ongoing => "ongoing",
-            Self::Completed => "completed",
+            Self::Ongoing => "laufend",
+            Self::Completed => "abgeschlossen",
             Self::Hiatus => "hiatus",
-            Self::Dropped => "dropped",
-            Self::Licensed => "licensed",
-            Self::Unknown => "unknown",
+            Self::Dropped => "abgebrochen",
+            Self::Paused => "pausiert",
+            Self::Unknown => "unbekannt",
         }
     }
 
     /// Parses a wire name back into a status; `None` for anything else.
+    ///
+    /// Only the current names — this is for parsing *fresh* input (a
+    /// dropdown choice, a saved alias), which never sends the old English
+    /// ids. Old on-disk *files* go through `serde`'s own `alias`, not this.
     pub fn from_id(id: &str) -> Option<Self> {
         match id {
-            "ongoing" => Some(Self::Ongoing),
-            "completed" => Some(Self::Completed),
+            "laufend" => Some(Self::Ongoing),
+            "abgeschlossen" => Some(Self::Completed),
             "hiatus" => Some(Self::Hiatus),
-            "dropped" => Some(Self::Dropped),
-            "licensed" => Some(Self::Licensed),
-            "unknown" => Some(Self::Unknown),
+            "abgebrochen" => Some(Self::Dropped),
+            "pausiert" => Some(Self::Paused),
+            "unbekannt" => Some(Self::Unknown),
             _ => None,
         }
     }
@@ -128,10 +160,15 @@ pub const IDLE_RECHECK_SECS: u64 = 30 * 24 * 60 * 60;
 /// case where waiting for a restart is the whole point — and it turned
 /// "finished" into a verdict nothing could overturn.
 ///
+/// `licensed` is checked before the status at all: it is the one fact where a
+/// missed run costs chapters that never come back, regardless of whether the
+/// serial otherwise looks settled.
+///
 /// A single subscription checked by hand does not come through here: an
 /// explicit click always runs, whatever the status says.
 pub fn should_check(
     status: SeriesStatus,
+    licensed: bool,
     enabled: bool,
     last_check: Option<u64>,
     now: u64,
@@ -139,7 +176,7 @@ pub fn should_check(
     if !enabled {
         return false;
     }
-    if !status.checks_rarely() {
+    if licensed || !status.checks_rarely() {
         return true;
     }
     match last_check {
@@ -148,20 +185,27 @@ pub fn should_check(
     }
 }
 
-/// The status that actually applies, out of the three that can disagree.
+/// The status that actually applies, out of the four that can disagree.
 ///
-/// Precedence, strongest first: what the user set by hand, what the status
-/// source last said, and finally the `completed`/`hiatus`/`dropped` flags. The
-/// hand setting has to win outright — otherwise the next check run silently
+/// Precedence, strongest first: whether the *subscription* is paused, what
+/// the user set by hand for the *series*, what the status source last said,
+/// and finally the `completed`/`hiatus`/`dropped` flags. A paused subscription
+/// wins outright and unconditionally — Fero currently checks nothing here, so
+/// nothing else in this list is even being kept fresh. Below that, the hand
+/// setting has to win over the source — otherwise the next check run silently
 /// undoes it, which is what happened while `completed` served as both the
 /// user's switch and the scraper's output.
 pub fn effective(
+    enabled: bool,
     manual: Option<SeriesStatus>,
     detected: SeriesStatus,
     completed: bool,
     hiatus: bool,
     dropped: bool,
 ) -> SeriesStatus {
+    if !enabled {
+        return SeriesStatus::Paused;
+    }
     if let Some(manual) = manual {
         return manual;
     }
@@ -292,12 +336,11 @@ pub fn resolve_comic(facts: &ComicStatusFacts, pending_chapters: usize) -> Serie
 ///
 /// `local_last_chapter` is the highest chapter number Fero has downloaded;
 /// `None` means nothing has been downloaded yet.
+///
+/// Licensing does not shortcut this any more — see [`is_licensed`]: a
+/// licensed novel gets its real status here (it can be running, finished, or
+/// on hiatus) and the license is a separate fact the caller reads on the side.
 pub fn resolve(facts: &SeriesStatusFacts, local_last_chapter: Option<u32>) -> SeriesStatus {
-    // Licensing outranks everything: it is the only status that says "act now".
-    if facts.licensed == Some(true) {
-        return SeriesStatus::Licensed;
-    }
-
     match facts.original {
         OriginalStatus::Hiatus => return SeriesStatus::Hiatus,
         OriginalStatus::Dropped => return SeriesStatus::Dropped,
@@ -319,6 +362,16 @@ pub fn resolve(facts: &SeriesStatusFacts, local_last_chapter: Option<u32>) -> Se
         // carry the decision on their own.
         (None, _) => SeriesStatus::Completed,
     }
+}
+
+/// Whether the source considers this novel licensed.
+///
+/// Orthogonal to [`resolve`]'s answer: a licensed novel can be running,
+/// finished, or on hiatus, and stays licensed regardless of which. Callers
+/// apply this one-way, the same as `completed`/`hiatus`/`dropped` — see
+/// [`crate::core::subscription::Subscription::apply_source_status`].
+pub fn is_licensed(facts: &SeriesStatusFacts) -> bool {
+    facts.licensed == Some(true)
 }
 
 #[cfg(test)]
@@ -428,12 +481,26 @@ mod tests {
         assert_eq!(resolve(&f, Some(10)), SeriesStatus::Ongoing);
     }
 
-    /// Licensing is the one fact that outranks the rest — it is the only status
-    /// that means "download it now, it may be gone next week".
+    /// Licensing used to shortcut `resolve` entirely; now it is a separate
+    /// fact that coexists with whatever the real status turns out to be.
     #[test]
-    fn licensing_wins_over_everything() {
+    fn licensing_no_longer_shortcuts_the_real_status() {
         let f = facts(OriginalStatus::Completed, Some(true), Some(true), Some(5));
-        assert_eq!(resolve(&f, Some(5)), SeriesStatus::Licensed);
+        assert_eq!(resolve(&f, Some(5)), SeriesStatus::Completed);
+        assert!(is_licensed(&f));
+    }
+
+    #[test]
+    fn a_series_can_be_running_and_licensed_at_once() {
+        let f = facts(OriginalStatus::Ongoing, None, Some(true), None);
+        assert_eq!(resolve(&f, None), SeriesStatus::Ongoing);
+        assert!(is_licensed(&f));
+    }
+
+    #[test]
+    fn no_licensing_signal_answers_false_not_a_guess() {
+        let f = facts(OriginalStatus::Ongoing, None, None, None);
+        assert!(!is_licensed(&f));
     }
 
     #[test]
@@ -459,12 +526,12 @@ mod tests {
     }
 
     /// Only a finished serial stops being checked: a dropped one may be picked
-    /// up again, a licensed one keeps releasing until the takedown.
+    /// up again, and a paused subscription is not "settled", it is idle.
     #[test]
     fn only_completed_stops_the_checks() {
         assert!(SeriesStatus::Completed.is_settled());
         assert!(!SeriesStatus::Dropped.is_settled());
-        assert!(!SeriesStatus::Licensed.is_settled());
+        assert!(!SeriesStatus::Paused.is_settled());
         assert!(!SeriesStatus::Hiatus.is_settled());
     }
 
@@ -494,37 +561,50 @@ mod tests {
         ] {
             assert!(status.checks_rarely(), "{status:?}");
             assert!(
-                !should_check(status, true, Some(now - 60), now),
+                !should_check(status, false, true, Some(now - 60), now),
                 "{status:?}"
             );
             assert!(
-                should_check(status, true, Some(now - IDLE_RECHECK_SECS), now),
+                should_check(status, false, true, Some(now - IDLE_RECHECK_SECS), now),
                 "{status:?}"
             );
-            assert!(should_check(status, true, None, now), "{status:?}");
+            assert!(should_check(status, false, true, None, now), "{status:?}");
         }
     }
 
-    /// A licensed serial is the one "dead" status that must not slow down:
-    /// the chapters disappear with the takedown.
     #[test]
-    fn living_and_licensed_serials_are_checked_every_run() {
+    fn ongoing_and_unknown_are_checked_every_run() {
         let now = 10 * IDLE_RECHECK_SECS;
-        for status in [
-            SeriesStatus::Ongoing,
-            SeriesStatus::Unknown,
-            SeriesStatus::Licensed,
-        ] {
+        for status in [SeriesStatus::Ongoing, SeriesStatus::Unknown] {
             assert!(!status.checks_rarely(), "{status:?}");
-            assert!(should_check(status, true, Some(now - 1), now), "{status:?}");
+            assert!(
+                should_check(status, false, true, Some(now - 1), now),
+                "{status:?}"
+            );
         }
+    }
+
+    /// A licensed serial is the one "dead"-looking status that must not slow
+    /// down: the chapters disappear with the takedown, whatever the
+    /// underlying life-cycle status otherwise says.
+    #[test]
+    fn a_licensed_serial_is_checked_every_run_even_when_otherwise_settled() {
+        let now = 10 * IDLE_RECHECK_SECS;
+        assert!(should_check(
+            SeriesStatus::Completed,
+            true,
+            true,
+            Some(now - 1),
+            now
+        ));
     }
 
     /// Pausing a subscription is the user saying "not now", and that outranks
-    /// every status.
+    /// every status — even a licensed one.
     #[test]
     fn a_disabled_subscription_is_never_checked() {
-        assert!(!should_check(SeriesStatus::Ongoing, false, None, 1_000));
+        assert!(!should_check(SeriesStatus::Ongoing, false, false, None, 1_000));
+        assert!(!should_check(SeriesStatus::Ongoing, true, false, None, 1_000));
     }
 
     /// The whole reason `status_override` exists: a hand setting that the next
@@ -533,6 +613,7 @@ mod tests {
     fn a_hand_setting_outranks_the_source() {
         assert_eq!(
             effective(
+                true,
                 Some(SeriesStatus::Completed),
                 SeriesStatus::Ongoing,
                 false,
@@ -543,6 +624,7 @@ mod tests {
         );
         assert_eq!(
             effective(
+                true,
                 Some(SeriesStatus::Ongoing),
                 SeriesStatus::Completed,
                 true,
@@ -556,24 +638,42 @@ mod tests {
     #[test]
     fn without_a_hand_setting_the_source_decides_and_the_flags_fill_in() {
         assert_eq!(
-            effective(None, SeriesStatus::Dropped, true, false, false),
+            effective(true, None, SeriesStatus::Dropped, true, false, false),
             SeriesStatus::Dropped
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, true, false, false),
+            effective(true, None, SeriesStatus::Unknown, true, false, false),
             SeriesStatus::Completed
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, false, true, false),
+            effective(true, None, SeriesStatus::Unknown, false, true, false),
             SeriesStatus::Hiatus
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, false, false, true),
+            effective(true, None, SeriesStatus::Unknown, false, false, true),
             SeriesStatus::Dropped
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, false, false, false),
+            effective(true, None, SeriesStatus::Unknown, false, false, false),
             SeriesStatus::Unknown
+        );
+    }
+
+    /// A paused *subscription* wins over everything else — even a hand
+    /// setting on the series status, because Fero currently checks nothing
+    /// here to act on that setting anyway.
+    #[test]
+    fn a_paused_subscription_outranks_even_a_hand_setting() {
+        assert_eq!(
+            effective(
+                false,
+                Some(SeriesStatus::Completed),
+                SeriesStatus::Ongoing,
+                false,
+                false,
+                false
+            ),
+            SeriesStatus::Paused
         );
     }
 
@@ -584,12 +684,47 @@ mod tests {
             SeriesStatus::Completed,
             SeriesStatus::Hiatus,
             SeriesStatus::Dropped,
-            SeriesStatus::Licensed,
+            SeriesStatus::Paused,
             SeriesStatus::Unknown,
         ] {
             assert_eq!(SeriesStatus::from_id(status.as_id()), Some(status));
         }
         assert_eq!(SeriesStatus::from_id("erledigt"), None);
+    }
+
+    /// Old files (before 09/2026) wrote the English wire values, and one
+    /// wrote "licensed" as its own status — both must still load, or an
+    /// upgrade makes existing subscriptions silently disappear from the list.
+    #[test]
+    fn legacy_english_wire_values_still_deserialize() {
+        for (legacy, expected) in [
+            ("\"ongoing\"", SeriesStatus::Ongoing),
+            ("\"completed\"", SeriesStatus::Completed),
+            ("\"hiatus\"", SeriesStatus::Hiatus),
+            ("\"dropped\"", SeriesStatus::Dropped),
+            ("\"unknown\"", SeriesStatus::Unknown),
+            ("\"licensed\"", SeriesStatus::Ongoing),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<SeriesStatus>(legacy).expect(legacy),
+                expected,
+                "{legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_writes_use_the_german_wire_values() {
+        for (status, expected) in [
+            (SeriesStatus::Ongoing, "\"laufend\""),
+            (SeriesStatus::Completed, "\"abgeschlossen\""),
+            (SeriesStatus::Hiatus, "\"hiatus\""),
+            (SeriesStatus::Dropped, "\"abgebrochen\""),
+            (SeriesStatus::Paused, "\"pausiert\""),
+            (SeriesStatus::Unknown, "\"unbekannt\""),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), expected);
+        }
     }
 
     fn comic(publication: OriginalStatus, source_completed: Option<bool>) -> ComicStatusFacts {
@@ -652,11 +787,13 @@ mod tests {
     }
 
     #[test]
-    fn attention_is_for_the_three_that_change_plans() {
-        assert!(SeriesStatus::Licensed.needs_attention());
+    fn attention_is_for_the_two_that_change_plans() {
         assert!(SeriesStatus::Dropped.needs_attention());
         assert!(SeriesStatus::Hiatus.needs_attention());
         assert!(!SeriesStatus::Ongoing.needs_attention());
         assert!(!SeriesStatus::Completed.needs_attention());
+        assert!(!SeriesStatus::Paused.needs_attention());
+        // Licensed is a separate fact now — callers OR it in themselves; see
+        // the webnovel/manga summary construction.
     }
 }
