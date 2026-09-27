@@ -1424,7 +1424,11 @@ fn check_one_subscription(
     if info.completed_hint == Some(true) && subscription.status_override.is_none() {
         subscription.completed = true;
     }
-    apply_source_status_text(subscription, info.source_status_text.as_deref(), status_aliases);
+    apply_source_status_text(
+        subscription,
+        info.source_status_text.as_deref(),
+        status_aliases,
+    );
     // Nur vorwaerts: verschwindet ein Datum aus der Seite oder liest ein Lauf
     // eine gekuerzte Liste, bleibt der zuletzt bekannte Stand stehen.
     if let Some(released) = info.latest_release_unix {

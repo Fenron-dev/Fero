@@ -1114,12 +1114,14 @@ fn build_pending_status_response() -> PendingStatusResponse {
 
     let pending = grouped
         .into_iter()
-        .map(|((host, _), (affected, text, sample_title))| PendingStatusText {
-            host,
-            text,
-            affected,
-            sample_title,
-        })
+        .map(
+            |((host, _), (affected, text, sample_title))| PendingStatusText {
+                host,
+                text,
+                affected,
+                sample_title,
+            },
+        )
         .collect();
 
     PendingStatusResponse {

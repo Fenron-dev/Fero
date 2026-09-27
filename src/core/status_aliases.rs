@@ -115,8 +115,13 @@ mod tests {
     fn saved_aliases_round_trip_and_are_looked_up_case_insensitively() {
         let dir = scratch("roundtrip");
 
-        save(&dir, "novelphoenix.com", " Paused Indefinitely ", SeriesStatus::Hiatus)
-            .expect("save should succeed");
+        save(
+            &dir,
+            "novelphoenix.com",
+            " Paused Indefinitely ",
+            SeriesStatus::Hiatus,
+        )
+        .expect("save should succeed");
 
         assert_eq!(
             lookup(&load(&dir), "novelphoenix.com", "PAUSED INDEFINITELY"),
@@ -133,7 +138,10 @@ mod tests {
 
         let aliases = load(&dir);
         assert_eq!(aliases.len(), 1);
-        assert_eq!(lookup(&aliases, "example.com", "weird status"), Some(SeriesStatus::Dropped));
+        assert_eq!(
+            lookup(&aliases, "example.com", "weird status"),
+            Some(SeriesStatus::Dropped)
+        );
     }
 
     #[test]
@@ -142,8 +150,14 @@ mod tests {
         save(&dir, "a.example", "odd", SeriesStatus::Hiatus).expect("save a");
         save(&dir, "b.example", "odd", SeriesStatus::Dropped).expect("save b");
 
-        assert_eq!(lookup(&load(&dir), "a.example", "odd"), Some(SeriesStatus::Hiatus));
-        assert_eq!(lookup(&load(&dir), "b.example", "odd"), Some(SeriesStatus::Dropped));
+        assert_eq!(
+            lookup(&load(&dir), "a.example", "odd"),
+            Some(SeriesStatus::Hiatus)
+        );
+        assert_eq!(
+            lookup(&load(&dir), "b.example", "odd"),
+            Some(SeriesStatus::Dropped)
+        );
     }
 
     #[test]

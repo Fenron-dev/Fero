@@ -209,9 +209,20 @@ pub fn classify_status_text(text: &str) -> Option<SeriesStatus> {
         "abandoned",
         "abgebrochen",
     ];
-    const COMPLETED: [&str; 5] = ["completed", "complete", "finished", "ended", "abgeschlossen"];
+    const COMPLETED: [&str; 5] = [
+        "completed",
+        "complete",
+        "finished",
+        "ended",
+        "abgeschlossen",
+    ];
     const ONGOING: [&str; 6] = [
-        "ongoing", "on-going", "publishing", "releasing", "active", "laufend",
+        "ongoing",
+        "on-going",
+        "publishing",
+        "releasing",
+        "active",
+        "laufend",
     ];
 
     if HIATUS.iter().any(|word| lower.contains(word)) {
@@ -316,15 +327,30 @@ mod tests {
 
     #[test]
     fn classifies_common_english_wordings() {
-        assert_eq!(classify_status_text("Completed"), Some(SeriesStatus::Completed));
-        assert_eq!(classify_status_text("Complete"), Some(SeriesStatus::Completed));
-        assert_eq!(classify_status_text("Finished"), Some(SeriesStatus::Completed));
+        assert_eq!(
+            classify_status_text("Completed"),
+            Some(SeriesStatus::Completed)
+        );
+        assert_eq!(
+            classify_status_text("Complete"),
+            Some(SeriesStatus::Completed)
+        );
+        assert_eq!(
+            classify_status_text("Finished"),
+            Some(SeriesStatus::Completed)
+        );
         assert_eq!(classify_status_text("Ongoing"), Some(SeriesStatus::Ongoing));
-        assert_eq!(classify_status_text("Publishing"), Some(SeriesStatus::Ongoing));
+        assert_eq!(
+            classify_status_text("Publishing"),
+            Some(SeriesStatus::Ongoing)
+        );
         assert_eq!(classify_status_text("Hiatus"), Some(SeriesStatus::Hiatus));
         assert_eq!(classify_status_text("On Hold"), Some(SeriesStatus::Hiatus));
         assert_eq!(classify_status_text("Dropped"), Some(SeriesStatus::Dropped));
-        assert_eq!(classify_status_text("Discontinued"), Some(SeriesStatus::Dropped));
+        assert_eq!(
+            classify_status_text("Discontinued"),
+            Some(SeriesStatus::Dropped)
+        );
     }
 
     #[test]

@@ -1265,7 +1265,14 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
         let delay_ms = subscription.download_delay_ms.unwrap_or(global_delay_ms);
         let client = PoliteClient::with_delay_ms(delay_ms)?;
 
-        match check_one(ws, &client, &mut subscription, options, job_id, &status_aliases) {
+        match check_one(
+            ws,
+            &client,
+            &mut subscription,
+            options,
+            job_id,
+            &status_aliases,
+        ) {
             Ok(downloaded) => {
                 new_chapters += downloaded;
                 subscription.last_error = None;
@@ -1315,7 +1322,11 @@ fn check_one(
     // for why this is tracked separately from last_check_unix.
     subscription.last_success_unix = Some(unix_now());
     apply_series_info(subscription, &info, options.metadata_mode);
-    apply_source_status_text(subscription, info.source_status_text.as_deref(), status_aliases);
+    apply_source_status_text(
+        subscription,
+        info.source_status_text.as_deref(),
+        status_aliases,
+    );
     enrich_from_anilist(subscription);
 
     // Diff by normalized URL. Chapters that vanished upstream are kept —

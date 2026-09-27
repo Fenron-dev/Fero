@@ -132,7 +132,12 @@ fn status_label(html: &Html) -> Option<String> {
     const KNOWN: [&str; 5] = ["ongoing", "completed", "hiatus", "stub", "dropped"];
     let selector = Selector::parse("span.label").ok()?;
     html.select(&selector)
-        .filter(|element| !element.value().classes().any(|class| class == "fiction-tag"))
+        .filter(|element| {
+            !element
+                .value()
+                .classes()
+                .any(|class| class == "fiction-tag")
+        })
         .map(|element| element_text(&element))
         .find(|text| KNOWN.contains(&text.to_lowercase().as_str()))
 }
