@@ -392,11 +392,18 @@ mod tests {
 
         assert_eq!(record.source, "novelphoenix");
         assert_eq!(record.author.as_deref(), Some("No Name"));
-        assert_eq!(record.genres, vec!["Action".to_string(), "Fantasy".to_string()]);
+        assert_eq!(
+            record.genres,
+            vec!["Action".to_string(), "Fantasy".to_string()]
+        );
         assert_eq!(record.tags, vec!["Gods".to_string()]);
         assert_eq!(record.latest_release_unix, Some(1_790_208_000));
         assert_eq!(record.total_chapters, 10);
-        assert_eq!(record.chapters.len(), 5, "nur geladene Kapitel zaehlen hier");
+        assert_eq!(
+            record.chapters.len(),
+            5,
+            "nur geladene Kapitel zaehlen hier"
+        );
     }
 
     #[test]

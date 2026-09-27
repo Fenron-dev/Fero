@@ -67,7 +67,10 @@ pub struct UnreachableHost {
 pub fn unreachable_hosts(samples: &[HostSample], now: u64) -> Vec<UnreachableHost> {
     let mut by_host: BTreeMap<&str, Vec<&HostSample>> = BTreeMap::new();
     for sample in samples.iter().filter(|sample| sample.enabled) {
-        by_host.entry(sample.host.as_str()).or_default().push(sample);
+        by_host
+            .entry(sample.host.as_str())
+            .or_default()
+            .push(sample);
     }
 
     let mut hosts = Vec::new();
@@ -89,9 +92,7 @@ pub fn unreachable_hosts(samples: &[HostSample], now: u64) -> Vec<UnreachableHos
         if now.saturating_sub(unreachable_since_unix) < UNREACHABLE_MIN_AGE_SECS {
             continue;
         }
-        let last_error = entries
-            .iter()
-            .find_map(|sample| sample.last_error.clone());
+        let last_error = entries.iter().find_map(|sample| sample.last_error.clone());
         hosts.push(UnreachableHost {
             host: host.to_string(),
             affected,
