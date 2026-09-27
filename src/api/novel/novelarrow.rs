@@ -19,7 +19,10 @@
 
 use scraper::{Html, Selector};
 
-use super::{sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo, NovelSource, PoliteClient};
+use super::{
+    meta_content, sanitize_to_xhtml, ChapterContent, ChapterRef, NovelInfo, NovelSource,
+    PoliteClient,
+};
 use crate::error::{FeroError, Result};
 
 /// NovelArrow source adapter (browser-window routed).
@@ -397,25 +400,6 @@ fn absolutize_novelarrow(href: &str) -> String {
     } else {
         format!("https://novelarrow.com/{href}")
     }
-}
-
-fn meta_content(html: &Html, name: &str) -> Option<String> {
-    for attr in ["name", "property"] {
-        let sel = format!("meta[{attr}='{name}']");
-        // `let-else` drops the borrowing `SelectorErrorKind` immediately;
-        // an `if let Ok(..)` would keep `sel` borrowed past its scope.
-        let Ok(selector) = Selector::parse(&sel) else {
-            continue;
-        };
-        if let Some(el) = html.select(&selector).next() {
-            if let Some(content) = el.value().attr("content") {
-                if !content.trim().is_empty() {
-                    return Some(content.trim().to_string());
-                }
-            }
-        }
-    }
-    None
 }
 
 fn first_text(html: &Html, raw_selector: &str) -> Option<String> {

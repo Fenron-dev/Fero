@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use scraper::{Html, Selector};
 
 use super::{
-    absolutize, host_of, looks_like_chapter_text, sanitize_to_xhtml, ChapterContent, ChapterRef,
-    NovelInfo, NovelSource, PoliteClient,
+    absolutize, host_of, looks_like_chapter_text, meta_content, og_image, sanitize_to_xhtml,
+    ChapterContent, ChapterRef, NovelInfo, NovelSource, PoliteClient,
 };
 use crate::error::{FeroError, Result};
 
@@ -189,9 +189,20 @@ fn parse_novel_info(page_url: &str, body: &str) -> Result<NovelInfo> {
 
     Ok(NovelInfo {
         title,
-        author: None,
-        cover_url: None,
-        description: None,
+        // A theme this adapter has never seen still tends to carry these,
+        // because they exist for link previews (Discord, Twitter, Facebook)
+        // rather than for a reader theme's own markup — the one thing an
+        // unknown site is reasonably likely to have in common with a known
+        // one. Genres and a completion hint have no such universal tag and
+        // stay unfilled here; the AniList/Goodreads enrichment that runs
+        // after every check tries those next.
+        author: meta_content(&html, "author"),
+        cover_url: og_image(&html).map(|src| absolutize(page_url, &src)),
+        // Sites that bother with a description at all tend to pick one of
+        // these two keys — the Open Graph property or the plain SEO name —
+        // and rarely both, so both are worth trying before giving up.
+        description: meta_content(&html, "og:description")
+            .or_else(|| meta_content(&html, "description")),
         completed_hint: None,
         latest_release_unix: None,
         genres: Vec::new(),
@@ -254,6 +265,45 @@ mod tests {
             info.chapters[0].url,
             "https://reader.example.org/novel/some-novel/chapter-1"
         );
+    }
+
+    /// A theme this adapter has never seen, but with the link-preview tags
+    /// almost every modern site carries regardless of its reader markup.
+    const TOC_PAGE_WITH_OPEN_GRAPH: &str = r#"
+    <html><head>
+      <title>Some Novel - Reader</title>
+      <meta property="og:image" content="/covers/some-novel.jpg"/>
+      <meta name="author" content="Jane Doe"/>
+      <meta property="og:description" content="A mage climbs forever."/>
+    </head><body>
+      <h1>Some Novel</h1>
+      <a href="/novel/some-novel/chapter-1">Chapter 1</a>
+      <a href="/novel/some-novel/chapter-2">Chapter 2</a>
+      <a href="/novel/some-novel/chapter-3">Chapter 3</a>
+    </body></html>"#;
+
+    #[test]
+    fn picks_up_cover_author_and_description_from_link_preview_tags() {
+        let info = parse_novel_info(
+            "https://reader.example.org/novel/some-novel",
+            TOC_PAGE_WITH_OPEN_GRAPH,
+        )
+        .expect("page should parse");
+        assert_eq!(
+            info.cover_url.as_deref(),
+            Some("https://reader.example.org/covers/some-novel.jpg")
+        );
+        assert_eq!(info.author.as_deref(), Some("Jane Doe"));
+        assert_eq!(info.description.as_deref(), Some("A mage climbs forever."));
+    }
+
+    #[test]
+    fn a_page_without_any_meta_tags_still_parses() {
+        let info = parse_novel_info("https://reader.example.org/novel/some-novel", TOC_PAGE)
+            .expect("page should parse");
+        assert_eq!(info.cover_url, None);
+        assert_eq!(info.author, None);
+        assert_eq!(info.description, None);
     }
 
     #[test]

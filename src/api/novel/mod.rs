@@ -834,6 +834,31 @@ pub fn og_image(html: &Html) -> Option<String> {
         .filter(|url| !url.is_empty())
 }
 
+/// Reads a `<meta>` tag's `content`, trying it first as `name="…"` then as
+/// `property="…"` — a page names its Open Graph tags with `property`, its
+/// plain SEO tags with `name`, and a caller usually does not know or care
+/// which one a given site picked.
+pub fn meta_content(html: &Html, name: &str) -> Option<String> {
+    for attr in ["name", "property"] {
+        let raw = format!("meta[{attr}='{name}']");
+        // `let-else` drops the borrowing `SelectorErrorKind` immediately;
+        // an `if let Ok(..)` would keep `raw` borrowed past its scope.
+        let Ok(selector) = Selector::parse(&raw) else {
+            continue;
+        };
+        if let Some(content) = html
+            .select(&selector)
+            .next()
+            .and_then(|element| element.value().attr("content"))
+            .map(str::trim)
+            .filter(|content| !content.is_empty())
+        {
+            return Some(content.to_string());
+        }
+    }
+    None
+}
+
 /// Detects an image's MIME type from its magic bytes.
 ///
 /// Returns `None` for anything that is not JPEG/PNG/WebP/GIF — e.g. an HTML
