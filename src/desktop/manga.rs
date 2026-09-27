@@ -1300,6 +1300,10 @@ fn check_one(
     ));
 
     let info = source.fetch_series_info(client, &subscription.url)?;
+    // The moment the source itself is known reachable — independent of
+    // whether any chapter/page download later fails. See core::source_health
+    // for why this is tracked separately from last_check_unix.
+    subscription.last_success_unix = Some(unix_now());
     apply_series_info(subscription, &info, options.metadata_mode);
     enrich_from_anilist(subscription);
 
@@ -1738,7 +1742,9 @@ fn ensure_cover(client: &PoliteClient, subscription: &Subscription, series_dir: 
         _ => "cover.jpg",
     };
     let target = series_dir.join(file_name);
-    match crate::deliver::targets::serialized_path_access(|| fs::write(&target, bytes)) {
+    match crate::deliver::targets::serialized_path_access(|| {
+        crate::core::atomic::write_atomic(&target, &bytes)
+    }) {
         Ok(()) => true,
         Err(error) => {
             debug_log(&format!(
@@ -1853,9 +1859,9 @@ fn pad_chapter_number(number: &str) -> Option<String> {
 /// check would mean thousands of file writes for a long-running series.
 /// Records a delivered chapter in the series folder's `fero.info.json`.
 ///
-/// Replaces the former `.fero.yaml` sidecar; descriptive metadata belongs in
-/// the CBZ's `ComicInfo.xml`, where any reader can see it.
-/// The manifest bookkeeping shared by every write and by the refresh.
+/// Replaces the former `.fero.yaml` sidecar. The manifest bookkeeping shared
+/// by every write and by the refresh — see
+/// [`manifest::WorkManifest::sync_from_subscription`].
 fn manifest_bookkeeping(series_dir: &Path, subscription: &Subscription) -> manifest::WorkManifest {
     let mut record = manifest::load_or_new(
         series_dir,
@@ -1864,26 +1870,7 @@ fn manifest_bookkeeping(series_dir: &Path, subscription: &Subscription) -> manif
         &subscription.url,
         &subscription.title,
     );
-    record.title = subscription.title.clone();
-    // Ins Manifest gehoert die geltende Einschaetzung; „unbekannt" waere fuer
-    // eine andere Instanz weniger wert als die Annahme, dass es weitergeht.
-    record.status = match subscription.effective_status() {
-        SeriesStatus::Unknown => SeriesStatus::Ongoing,
-        known => known,
-    };
-    record.last_check_unix = Some(unix_now());
-    record.latest_release_unix = subscription.latest_release_unix;
-    record.chapters = subscription
-        .known_chapters
-        .iter()
-        .filter(|chapter| chapter.downloaded_at_unix.is_some())
-        .map(|chapter| manifest::ChapterRecord {
-            index: chapter.index,
-            title: chapter.title.clone(),
-            url: Some(chapter.url.clone()),
-            downloaded_at_unix: chapter.downloaded_at_unix.unwrap_or_default(),
-        })
-        .collect();
+    record.sync_from_subscription(subscription);
     record
 }
 

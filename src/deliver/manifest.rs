@@ -6,15 +6,22 @@
 //!
 //! The manifest sits *inside* the work folder instead, so a work stays
 //! self-describing wherever it is moved, and Fero can pick up where it left off
-//! even if its data directory is lost. Descriptive metadata (title, author,
-//! description, genres) deliberately does **not** live here — it belongs in the
-//! EPUB's OPF and the CBZ's `ComicInfo.xml`, where every reader can see it.
+//! even if its data directory is lost. The full description (long summary,
+//! cover) still lives only in the EPUB's OPF and the CBZ's `ComicInfo.xml`,
+//! one reader-visible copy each — duplicating it a third time here would just
+//! be more places for it to go stale. What *is* mirrored here is every field
+//! someone needs in order to judge a work from the folder alone, without
+//! opening an archive: genre, author, tags, source and how many chapters the
+//! series has versus how many are delivered. Fero has no database, and this
+//! is the one file that is guaranteed to sit next to the files it describes —
+//! Fundus, a script, or a person with a file browser reads it as ground truth.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::status::SeriesStatus;
+use crate::core::subscription::{unix_now, Subscription};
 use crate::deliver::targets::MediaKind;
 use crate::error::{FeroError, Result};
 
@@ -68,8 +75,23 @@ pub struct WorkManifest {
     pub media_kind: MediaKind,
     /// Overview/ToC URL the work was fetched from.
     pub source_url: String,
+    /// Adapter id the work was fetched with (`royalroad`, `mangatown`, …).
+    ///
+    /// `source_url` alone answers "which page"; this answers "which site" for
+    /// a reader of the manifest who does not want to parse the URL.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
     /// Title at the time of the last write, for human readers of the file.
     pub title: String,
+    /// Author, as last reported by the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Genre names, as last reported by the source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<String>,
+    /// Free-form tags, as last reported by the source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// Life cycle status as last determined.
     #[serde(default)]
     pub status: SeriesStatus,
@@ -84,12 +106,24 @@ pub struct WorkManifest {
     /// series that only the fetching side ever gets to see.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_release_unix: Option<u64>,
+    /// How many chapters the *series* has, per the last table of contents.
+    ///
+    /// Not the same question as `chapters.len()`: that counts what is
+    /// delivered into this folder, this counts what exists at the source —
+    /// the gap between the two is exactly what a reader of the manifest
+    /// usually wants to know ("84 of 92 chapters here").
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub total_chapters: u32,
     /// Files Fero wrote here, newest last.
     #[serde(default)]
     pub files: Vec<DeliveredFile>,
     /// Chapters present locally.
     #[serde(default)]
     pub chapters: Vec<ChapterRecord>,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl WorkManifest {
@@ -105,10 +139,15 @@ impl WorkManifest {
             subscription_id: subscription_id.into(),
             media_kind,
             source_url: source_url.into(),
+            source: String::new(),
             title: title.into(),
+            author: None,
+            genres: Vec::new(),
+            tags: Vec::new(),
             status: SeriesStatus::Unknown,
             last_check_unix: None,
             latest_release_unix: None,
+            total_chapters: 0,
             files: Vec::new(),
             chapters: Vec::new(),
         }
@@ -131,6 +170,43 @@ impl WorkManifest {
     /// Returns true when the manifest already lists a file by that name.
     pub fn has_file(&self, name: &str) -> bool {
         self.files.iter().any(|file| file.name == name)
+    }
+
+    /// Copies a subscription's current descriptive metadata and bookkeeping
+    /// into the manifest. Shared by both media kinds so a field added here
+    /// does not have to be added twice.
+    ///
+    /// Does *not* touch `files` — the caller decides whether this write also
+    /// delivers something new, via [`Self::record_file`].
+    pub fn sync_from_subscription(&mut self, subscription: &Subscription) {
+        self.source = subscription.source.clone();
+        self.title = subscription.title.clone();
+        self.author = subscription.author.clone();
+        self.genres = subscription.genres.clone();
+        self.tags = subscription.tags.clone();
+        // Ins Manifest gehoert die geltende Einschaetzung; „unbekannt" waere
+        // fuer eine andere Instanz weniger wert als die Annahme, dass es
+        // weitergeht.
+        self.status = match subscription.effective_status() {
+            SeriesStatus::Unknown => SeriesStatus::Ongoing,
+            known => known,
+        };
+        self.last_check_unix = Some(unix_now());
+        self.latest_release_unix = subscription.latest_release_unix;
+        // known_chapters is the superset ever seen in a table of contents,
+        // downloaded or not — chapters.len() below is the delivered subset.
+        self.total_chapters = subscription.known_chapters.len() as u32;
+        self.chapters = subscription
+            .known_chapters
+            .iter()
+            .filter(|chapter| chapter.downloaded_at_unix.is_some())
+            .map(|chapter| ChapterRecord {
+                index: chapter.index,
+                title: chapter.title.clone(),
+                url: Some(chapter.url.clone()),
+                downloaded_at_unix: chapter.downloaded_at_unix.unwrap_or_default(),
+            })
+            .collect();
     }
 }
 
@@ -282,5 +358,63 @@ mod tests {
 
         assert!(!loaded.has_file("fremd.epub"));
         assert_eq!(loaded.subscription_id, "andere-id");
+    }
+
+    #[test]
+    fn syncing_copies_descriptive_metadata_and_both_chapter_counts() {
+        use crate::core::subscription::KnownChapter;
+
+        let mut subscription = Subscription::new(
+            "https://example.com/novel",
+            "novelphoenix",
+            "Absolute Regression",
+        );
+        subscription.author = Some("No Name".to_string());
+        subscription.genres = vec!["Action".to_string(), "Fantasy".to_string()];
+        subscription.tags = vec!["Gods".to_string()];
+        subscription.latest_release_unix = Some(1_790_208_000);
+        // Zehn Kapitel bekannt, aber nur die Haelfte lokal geladen — genau die
+        // Luecke, die total_chapters von chapters.len() unterscheidet.
+        subscription.known_chapters = (1..=10)
+            .map(|index| KnownChapter {
+                index,
+                title: format!("Chapter {index}"),
+                url: format!("https://example.com/novel/chapter-{index}"),
+                volume: None,
+                page_count: None,
+                downloaded_at_unix: (index <= 5).then_some(1_700_000_000),
+                placeholder: false,
+            })
+            .collect();
+
+        let mut record = manifest();
+        record.sync_from_subscription(&subscription);
+
+        assert_eq!(record.source, "novelphoenix");
+        assert_eq!(record.author.as_deref(), Some("No Name"));
+        assert_eq!(record.genres, vec!["Action".to_string(), "Fantasy".to_string()]);
+        assert_eq!(record.tags, vec!["Gods".to_string()]);
+        assert_eq!(record.latest_release_unix, Some(1_790_208_000));
+        assert_eq!(record.total_chapters, 10);
+        assert_eq!(record.chapters.len(), 5, "nur geladene Kapitel zaehlen hier");
+    }
+
+    #[test]
+    fn an_old_manifest_without_the_new_fields_still_parses() {
+        let dir = scratch("legacy");
+        std::fs::write(
+            manifest_path(&dir),
+            r#"{"schema":1,"subscription_id":"abc123","media_kind":"webnovel",
+               "source_url":"https://example.com/novel","title":"Ein Titel",
+               "status":"ongoing","files":[],"chapters":[]}"#,
+        )
+        .expect("write should succeed");
+
+        let loaded = load(&dir).expect("legacy manifest should still parse");
+
+        assert_eq!(loaded.source, "");
+        assert_eq!(loaded.author, None);
+        assert!(loaded.genres.is_empty());
+        assert_eq!(loaded.total_chapters, 0);
     }
 }
