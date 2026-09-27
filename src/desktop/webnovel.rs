@@ -257,6 +257,11 @@ struct WebnovelSubscriptionSummary {
     has_cover: bool,
     completed: bool,
     hiatus: bool,
+    dropped: bool,
+    /// Licensed — orthogonal to the life-cycle status: a work can be running
+    /// *and* licensed, and the license does not change when new chapters
+    /// close it out.
+    licensed: bool,
     enabled: bool,
     known_chapters: usize,
     downloaded_chapters: usize,
@@ -305,7 +310,8 @@ impl WebnovelSubscriptionSummary {
             target_dir: subscription.target_dir.clone(),
             series_status: subscription.effective_status(),
             status_override: subscription.status_override,
-            needs_attention: subscription.effective_status().needs_attention(),
+            needs_attention: subscription.effective_status().needs_attention()
+                || subscription.licensed,
             status_checked_at: subscription.status_checked_at,
             latest_release_unix: subscription.latest_release_unix,
             translation_done: subscription.translation_done,
@@ -318,6 +324,8 @@ impl WebnovelSubscriptionSummary {
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
+            dropped: subscription.dropped,
+            licensed: subscription.licensed,
             enabled: subscription.enabled,
             known_chapters: subscription.known_chapters.len(),
             downloaded_chapters: subscription.downloaded_count(),
@@ -751,6 +759,10 @@ struct WebnovelUpdateRequest {
     completed: Option<bool>,
     #[serde(default)]
     hiatus: Option<bool>,
+    /// Manual licensed toggle — orthogonal to the life-cycle status, so it
+    /// has no `"auto"` and no override lock; it is just a flag.
+    #[serde(default)]
+    licensed: Option<bool>,
     #[serde(default)]
     enabled: Option<bool>,
     /// Genres and tags supplied by the bulk editor.
@@ -797,6 +809,9 @@ pub(super) fn build_webnovel_update_response(body: &[u8]) -> SimpleResponse {
     }
     if let Some(hiatus) = req.hiatus {
         subscription.hiatus = hiatus;
+    }
+    if let Some(licensed) = req.licensed {
+        subscription.licensed = licensed;
     }
     if let Some(enabled) = req.enabled {
         subscription.enabled = enabled;
@@ -1174,6 +1189,7 @@ fn run_webnovel_check(
                 .filter(|subscription| {
                     status::should_check(
                         subscription.effective_status(),
+                        subscription.licensed,
                         subscription.enabled,
                         subscription.last_check_unix,
                         now,
@@ -1323,6 +1339,11 @@ fn refresh_series_status(client: &PoliteClient, subscription: &mut Subscription)
     subscription.series_status = resolved;
     subscription.translation_done = facts.fully_translated;
     subscription.status_source_url = Some(url);
+    // One-way, like completed/hiatus/dropped: a license does not get
+    // un-set just because a later fetch failed to see it again.
+    if status::is_licensed(&facts) {
+        subscription.licensed = true;
+    }
 }
 
 /// The page a subscription's status is read from.

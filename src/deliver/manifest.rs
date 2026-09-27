@@ -95,6 +95,11 @@ pub struct WorkManifest {
     /// Life cycle status as last determined.
     #[serde(default)]
     pub status: SeriesStatus,
+    /// Licensed — orthogonal to `status`: a work can be `laufend` *and*
+    /// licensed. Always written (not skipped when `false`), so a reader can
+    /// rely on the key existing rather than defaulting an absence itself.
+    #[serde(default)]
+    pub licensed: bool,
     /// Unix timestamp of the last check against the source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_check_unix: Option<u64>,
@@ -145,6 +150,7 @@ impl WorkManifest {
             genres: Vec::new(),
             tags: Vec::new(),
             status: SeriesStatus::Unknown,
+            licensed: false,
             last_check_unix: None,
             latest_release_unix: None,
             total_chapters: 0,
@@ -191,6 +197,7 @@ impl WorkManifest {
             SeriesStatus::Unknown => SeriesStatus::Ongoing,
             known => known,
         };
+        self.licensed = subscription.licensed;
         self.last_check_unix = Some(unix_now());
         self.latest_release_unix = subscription.latest_release_unix;
         // known_chapters is the superset ever seen in a table of contents,
@@ -373,6 +380,7 @@ mod tests {
         subscription.genres = vec!["Action".to_string(), "Fantasy".to_string()];
         subscription.tags = vec!["Gods".to_string()];
         subscription.latest_release_unix = Some(1_790_208_000);
+        subscription.licensed = true;
         // Zehn Kapitel bekannt, aber nur die Haelfte lokal geladen — genau die
         // Luecke, die total_chapters von chapters.len() unterscheidet.
         subscription.known_chapters = (1..=10)
@@ -398,6 +406,7 @@ mod tests {
         );
         assert_eq!(record.tags, vec!["Gods".to_string()]);
         assert_eq!(record.latest_release_unix, Some(1_790_208_000));
+        assert!(record.licensed);
         assert_eq!(record.total_chapters, 10);
         assert_eq!(
             record.chapters.len(),
@@ -423,5 +432,7 @@ mod tests {
         assert_eq!(loaded.author, None);
         assert!(loaded.genres.is_empty());
         assert_eq!(loaded.total_chapters, 0);
+        assert!(!loaded.licensed);
+        assert_eq!(loaded.status, SeriesStatus::Ongoing);
     }
 }

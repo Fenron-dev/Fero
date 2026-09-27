@@ -278,6 +278,11 @@ pub(crate) struct MangaSubscriptionSummary {
     has_cover: bool,
     completed: bool,
     hiatus: bool,
+    dropped: bool,
+    /// Licensed — orthogonal to the life-cycle status: a work can be running
+    /// *and* licensed, and the license does not change when new chapters
+    /// close it out.
+    licensed: bool,
     /// The status that applies, hand setting first — what the badge shows.
     series_status: SeriesStatus,
     /// The hand setting itself, so the control can show what is set rather
@@ -346,9 +351,12 @@ impl MangaSubscriptionSummary {
             has_cover,
             completed: subscription.completed,
             hiatus: subscription.hiatus,
+            dropped: subscription.dropped,
+            licensed: subscription.licensed,
             series_status: subscription.effective_status(),
             status_override: subscription.status_override,
-            needs_attention: subscription.effective_status().needs_attention(),
+            needs_attention: subscription.effective_status().needs_attention()
+                || subscription.licensed,
             status_source_url: subscription.status_source_url.clone(),
             status_checked_at: subscription.status_checked_at,
             latest_release_unix: subscription.latest_release_unix,
@@ -862,6 +870,10 @@ struct UpdateRequest {
     completed: Option<bool>,
     #[serde(default)]
     hiatus: Option<bool>,
+    /// Manual licensed toggle — orthogonal to the life-cycle status, so it
+    /// has no `"auto"` and no override lock; it is just a flag.
+    #[serde(default)]
+    licensed: Option<bool>,
     #[serde(default)]
     enabled: Option<bool>,
     /// Genres and tags supplied by the bulk editor.
@@ -907,6 +919,9 @@ pub(crate) fn build_update_response(body: &[u8]) -> MangaSimpleResponse {
     }
     if let Some(hiatus) = req.hiatus {
         subscription.hiatus = hiatus;
+    }
+    if let Some(licensed) = req.licensed {
+        subscription.licensed = licensed;
     }
     if let Some(enabled) = req.enabled {
         subscription.enabled = enabled;
@@ -1228,6 +1243,7 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
                 .filter(|subscription| {
                     status::should_check(
                         subscription.effective_status(),
+                        subscription.licensed,
                         subscription.enabled,
                         subscription.last_check_unix,
                         now,
