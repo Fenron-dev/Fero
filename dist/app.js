@@ -144,6 +144,93 @@ function sourceHealthTooltip(health) {
   return `${health.host}: nicht erreichbar seit ${since} (${count} betroffen)${reason}`;
 }
 
+/* Wortlaute, die core::status::classify_status_text nicht einordnen konnte
+ * und für die auch noch keine Zuordnung gespeichert ist — je Host und
+ * normalisiertem Text einmal, nicht einmal pro Abo. */
+let pendingStatusTexts = [];
+
+/* Nur die vier Stati, die ueberhaupt aus einem Quelltext folgen koennen:
+ * "Unbekannt" waere eine Nullaussage, "Lizenziert" ist laut core::status ein
+ * reines Handsignal, das keine Seite fuer sich behaupten darf. */
+const ALIASABLE_STATUS_OPTIONS = [
+  ["ongoing", "Laufend"],
+  ["completed", "Abgeschlossen"],
+  ["hiatus", "Hiatus"],
+  ["dropped", "Abgebrochen"],
+];
+
+async function loadPendingStatusTexts() {
+  try {
+    const data = await api("status-aliases/pending");
+    pendingStatusTexts = data.pending || [];
+  } catch (error) {
+    // Kein Grund, die Quellenansicht zu verweigern — das Panel bleibt leer.
+    pendingStatusTexts = [];
+  }
+}
+
+function renderPendingStatusTexts() {
+  const panel = $("pending-status-panel");
+  const list = $("pending-status-list");
+  clear(list);
+  panel.hidden = pendingStatusTexts.length === 0;
+  if (!pendingStatusTexts.length) return;
+
+  for (const pending of pendingStatusTexts) {
+    const row = el("div", "pending-status-row");
+
+    const text = el("div", "pending-status-text");
+    const label = el("strong", null, `„${pending.text}“`);
+    const meta = el(
+      "span",
+      "pending-status-meta",
+      `${pending.host} · ${pending.affected === 1 ? "1 Abo" : `${pending.affected} Abos`} · z. B. „${pending.sampleTitle}“`
+    );
+    text.append(label, meta);
+
+    const select = document.createElement("select");
+    select.className = "input";
+    select.appendChild(el("option", null, "Status wählen …")).value = "";
+    for (const [id, optionLabel] of ALIASABLE_STATUS_OPTIONS) {
+      const option = el("option", null, optionLabel);
+      option.value = id;
+      select.appendChild(option);
+    }
+
+    const save = el("button", "action primary", "Speichern");
+    save.type = "button";
+    save.addEventListener("click", async () => {
+      if (!select.value) {
+        status("Bitte einen Status wählen.", true);
+        return;
+      }
+      save.disabled = true;
+      try {
+        const result = await post("status-aliases/save", {
+          host: pending.host,
+          text: pending.text,
+          status: select.value,
+        });
+        if (result.error) throw new Error(result.error);
+        status(
+          result.applied === 1
+            ? "Zuordnung gespeichert, 1 Abo aktualisiert."
+            : `Zuordnung gespeichert, ${result.applied} Abos aktualisiert.`
+        );
+        await loadPendingStatusTexts();
+        renderPendingStatusTexts();
+        await loadSubscriptions();
+      } catch (error) {
+        status(error.message, true);
+        save.disabled = false;
+      }
+    });
+
+    row.append(text, select, save);
+    list.appendChild(row);
+  }
+}
+
 // ── Kleinkram ────────────────────────────────────────────────────────────
 
 const $ = (id) => document.getElementById(id);
@@ -463,6 +550,7 @@ document.querySelectorAll(".nav-item").forEach((item) => {
       loadSourceHealth().then(() =>
         showSourceKind(document.querySelector(".source-tab.is-active")?.dataset.sourceKind || "webnovel")
       );
+      loadPendingStatusTexts().then(renderPendingStatusTexts);
     }
     if (view === "settings") {
       loadTargets();

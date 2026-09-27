@@ -483,6 +483,11 @@ pub(super) fn build_webnovel_subscribe_response(body: &[u8]) -> WebnovelSubscrib
     subscription.genres = info.genres.clone();
     subscription.tags = info.tags.clone();
     subscription.completed = info.completed_hint.unwrap_or(false);
+    apply_source_status_text(
+        &mut subscription,
+        info.source_status_text.as_deref(),
+        &crate::core::status_aliases::load(&ws.store),
+    );
     subscription.known_chapters = info
         .chapters
         .iter()
@@ -1154,6 +1159,9 @@ fn run_webnovel_check(
     job_id: &str,
 ) -> Result<String> {
     let system_dir = &ws.store;
+    // Loaded once for the whole run rather than per subscription: a small
+    // file, but 800+ re-reads of it per run would not be.
+    let status_aliases = crate::core::status_aliases::load(system_dir);
     let all = list_subscriptions(system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
@@ -1222,7 +1230,14 @@ fn run_webnovel_check(
             status.message = None;
         });
 
-        match check_one_subscription(ws, &client, &mut subscription, options, job_id) {
+        match check_one_subscription(
+            ws,
+            &client,
+            &mut subscription,
+            options,
+            job_id,
+            &status_aliases,
+        ) {
             Ok(downloaded) => {
                 new_chapters += downloaded;
                 subscription.last_error = None;
@@ -1330,6 +1345,7 @@ fn check_one_subscription(
     subscription: &mut Subscription,
     options: &WebnovelCheckOptions,
     job_id: &str,
+    status_aliases: &[crate::core::status_aliases::StatusAlias],
 ) -> Result<usize> {
     if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
         return Err(FeroError::ExternalApi(reason));
@@ -1408,6 +1424,7 @@ fn check_one_subscription(
     if info.completed_hint == Some(true) && subscription.status_override.is_none() {
         subscription.completed = true;
     }
+    apply_source_status_text(subscription, info.source_status_text.as_deref(), status_aliases);
     // Nur vorwaerts: verschwindet ein Datum aus der Seite oder liest ein Lauf
     // eine gekuerzte Liste, bleibt der zuletzt bekannte Stand stehen.
     if let Some(released) = info.latest_release_unix {

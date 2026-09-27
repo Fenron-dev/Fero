@@ -853,6 +853,54 @@ body {
   font-size: 13px;
 }
 
+/* Ungeklärte Quellwortlaute (core::status_aliases). Warnfarbe wie der
+   Status-Banner: eine offene Zuordnung ist kein Fehler, aber wartet auf eine
+   Entscheidung. */
+.pending-status-panel {
+  padding: 12px 14px;
+  margin: 0 0 var(--gap);
+  border: 1px solid #f0b86644;
+  border-radius: var(--radius);
+  background: #f0b86614;
+}
+
+.pending-status-panel h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.pending-status-panel .hint {
+  margin-bottom: 10px;
+}
+
+.pending-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid #f0b86633;
+}
+
+.pending-status-row:first-child {
+  border-top: 0;
+}
+
+.pending-status-text {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.pending-status-text strong {
+  color: var(--warn);
+}
+
+.pending-status-text .pending-status-meta {
+  display: block;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 /* ── Detail-Übersicht mit Cover ────────────────────────────────────────── */
 
 .detail-overview {

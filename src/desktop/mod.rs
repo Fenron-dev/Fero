@@ -35,6 +35,7 @@ use crate::api::novel::{
     ChapterRef, PoliteClient,
 };
 use crate::core::epub::{write_epub, EpubChapter, EpubCover, EpubMeta};
+use crate::core::status::SeriesStatus;
 use crate::core::subscription::is_valid_subscription_id;
 use crate::core::vault::Vault;
 use crate::core::webnovel::{
@@ -66,6 +67,8 @@ impl_outcome!(
     TargetsResponse,
     SimpleResponse,
     SourceHealthResponse,
+    PendingStatusResponse,
+    SaveStatusAliasResponse,
 );
 const LEGACY_SYSTEM_DIR: &str = ".mediashelf";
 /// In-vault trash folder; deleted files move here (reversible) preserving
@@ -1009,6 +1012,226 @@ fn build_source_health_response() -> SourceHealthResponse {
         hosts: crate::core::source_health::unreachable_hosts(&samples, unix_now()),
         error: None,
     }
+}
+
+/// Records what the subscribed source's own page said about its status, and
+/// applies it if it can be placed — via the shared classifier first, a
+/// confirmed alias second. Shared by both engines so this logic, and the
+/// question of which one wins, exists exactly once.
+///
+/// `raw` is kept on the subscription even when neither classifies it: that is
+/// precisely the text `/api/status-aliases/pending` needs in order to ask.
+fn apply_source_status_text(
+    subscription: &mut Subscription,
+    raw: Option<&str>,
+    aliases: &[crate::core::status_aliases::StatusAlias],
+) {
+    subscription.source_status_text = raw.map(str::to_string);
+    let Some(raw) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
+        return;
+    };
+    let classified = crate::core::status::classify_status_text(raw).or_else(|| {
+        host_of(&subscription.url)
+            .and_then(|host| crate::core::status_aliases::lookup(aliases, &host, raw))
+    });
+    if let Some(classified) = classified {
+        subscription.apply_source_status(classified);
+    }
+}
+
+/// One host+wording combination nobody has told Fero the meaning of yet.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingStatusText {
+    host: String,
+    /// As a subscription's page actually printed it — not normalized, so the
+    /// user recognizes their own source's wording.
+    text: String,
+    /// How many enabled subscriptions on this host currently show this text.
+    affected: usize,
+    /// One subscription's title, so the row means something at a glance.
+    sample_title: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingStatusResponse {
+    pending: Vec<PendingStatusText>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Lists every source wording currently unclassified and unaliased, for the
+/// "Unbekannte Stati" panel in the Quellen view.
+///
+/// Grouped by (host, normalized text) rather than listed per subscription —
+/// a wording repeats across every title on the same host, and the user
+/// answers it once, not once per title.
+fn build_pending_status_response() -> PendingStatusResponse {
+    let ws = match resolve_workspace(None) {
+        Ok(ws) => ws,
+        Err(message) => {
+            return PendingStatusResponse {
+                pending: Vec::new(),
+                error: Some(message),
+            }
+        }
+    };
+    let aliases = crate::core::status_aliases::load(&ws.store);
+    let webnovels = list_subscriptions(&ws.store).unwrap_or_default();
+    let mangas = crate::core::manga::list_subscriptions(&ws.store).unwrap_or_default();
+
+    // (host, normalized text) -> (count, display text, one sample title).
+    let mut grouped: std::collections::BTreeMap<(String, String), (usize, String, String)> =
+        std::collections::BTreeMap::new();
+    for subscription in webnovels.iter().chain(mangas.iter()) {
+        if !subscription.enabled {
+            continue;
+        }
+        let Some(raw) = subscription
+            .source_status_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        else {
+            continue;
+        };
+        if crate::core::status::classify_status_text(raw).is_some() {
+            continue;
+        }
+        let Some(host) = host_of(&subscription.url) else {
+            continue;
+        };
+        if crate::core::status_aliases::lookup(&aliases, &host, raw).is_some() {
+            continue;
+        }
+        let key = (host, crate::core::status_aliases::normalize(raw));
+        let entry = grouped
+            .entry(key)
+            .or_insert_with(|| (0, raw.to_string(), subscription.title.clone()));
+        entry.0 += 1;
+    }
+
+    let pending = grouped
+        .into_iter()
+        .map(|((host, _), (affected, text, sample_title))| PendingStatusText {
+            host,
+            text,
+            affected,
+            sample_title,
+        })
+        .collect();
+
+    PendingStatusResponse {
+        pending,
+        error: None,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveStatusAliasRequest {
+    host: String,
+    text: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveStatusAliasResponse {
+    /// Subscriptions that were already showing this text and got updated
+    /// immediately, without waiting for their next check.
+    applied: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Only these four are ever *derived from a source's own wording* — Unknown
+/// would be a no-op alias, and Licensed is a manual-only signal (§5 in the
+/// project notes) that no page text is trusted to assert on its own.
+const ALIASABLE_STATUSES: [SeriesStatus; 4] = [
+    SeriesStatus::Ongoing,
+    SeriesStatus::Completed,
+    SeriesStatus::Hiatus,
+    SeriesStatus::Dropped,
+];
+
+/// Records what a host's wording means, and applies it to every subscription
+/// currently showing it — see [`build_pending_status_response`].
+fn build_save_status_alias_response(body: &[u8]) -> SaveStatusAliasResponse {
+    let req: SaveStatusAliasRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(error) => {
+            return SaveStatusAliasResponse {
+                applied: 0,
+                error: Some(format!("Invalid request: {error}")),
+            }
+        }
+    };
+    let requested = SeriesStatus::from_id(&req.status).filter(|s| ALIASABLE_STATUSES.contains(s));
+    let Some(status) = requested else {
+        return SaveStatusAliasResponse {
+            applied: 0,
+            error: Some("Ungültiger Status für eine Quelltext-Zuordnung.".to_string()),
+        };
+    };
+    let ws = match resolve_workspace(None) {
+        Ok(ws) => ws,
+        Err(message) => {
+            return SaveStatusAliasResponse {
+                applied: 0,
+                error: Some(message),
+            }
+        }
+    };
+    let saved = crate::core::status_aliases::save(&ws.store, &req.host, &req.text, status);
+    if let Err(error) = saved {
+        return SaveStatusAliasResponse {
+            applied: 0,
+            error: Some(error.to_string()),
+        };
+    }
+
+    SaveStatusAliasResponse {
+        applied: apply_alias_now(&ws, &req.host, &req.text, status),
+        error: None,
+    }
+}
+
+/// Applies a freshly-confirmed alias to every subscription it already
+/// matches, so the user sees the effect immediately rather than at the next
+/// scheduled check.
+fn apply_alias_now(ws: &Workspace, host: &str, text: &str, status: SeriesStatus) -> usize {
+    let normalized = crate::core::status_aliases::normalize(text);
+    let matches = |subscription: &Subscription| {
+        host_of(&subscription.url).as_deref() == Some(host)
+            && subscription
+                .source_status_text
+                .as_deref()
+                .map(crate::core::status_aliases::normalize)
+                .as_deref()
+                == Some(normalized.as_str())
+    };
+
+    let mut applied = 0;
+    for mut subscription in list_subscriptions(&ws.store).unwrap_or_default() {
+        if matches(&subscription) {
+            subscription.apply_source_status(status);
+            if save_subscription(&ws.store, &subscription).is_ok() {
+                applied += 1;
+            }
+        }
+    }
+    let mangas = crate::core::manga::list_subscriptions(&ws.store).unwrap_or_default();
+    for mut subscription in mangas {
+        if matches(&subscription) {
+            subscription.apply_source_status(status);
+            if crate::core::manga::save_subscription(&ws.store, &subscription).is_ok() {
+                applied += 1;
+            }
+        }
+    }
+    applied
 }
 
 /// Serves a subscription's cached cover image.

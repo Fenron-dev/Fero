@@ -506,6 +506,11 @@ pub(crate) fn build_subscribe_response(body: &[u8]) -> MangaSubscribeResponse {
         .filter(|kind| kind.uses_manga_engine());
     subscription.folder_name = Some(unique_manga_folder_name(&ws, &subscription));
     apply_series_info(&mut subscription, &info, MetadataMode::Fill);
+    apply_source_status_text(
+        &mut subscription,
+        info.source_status_text.as_deref(),
+        &crate::core::status_aliases::load(&ws.store),
+    );
     subscription.known_chapters = info
         .chapters
         .iter()
@@ -1207,6 +1212,9 @@ fn subscription_kind(subscription: &Subscription) -> MediaKind {
 
 fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<String> {
     let system_dir = &ws.store;
+    // Loaded once for the whole run rather than per subscription — see the
+    // webnovel engine's identical comment on the same call.
+    let status_aliases = crate::core::status_aliases::load(system_dir);
     let all = list_subscriptions(system_dir)?;
     let selected: Vec<Subscription> = match options.only_id.as_deref() {
         Some(id) => all
@@ -1256,7 +1264,7 @@ fn run_check(ws: &Workspace, options: &CheckOptions, job_id: &str) -> Result<Str
         let delay_ms = subscription.download_delay_ms.unwrap_or(global_delay_ms);
         let client = PoliteClient::with_delay_ms(delay_ms)?;
 
-        match check_one(ws, &client, &mut subscription, options, job_id) {
+        match check_one(ws, &client, &mut subscription, options, job_id, &status_aliases) {
             Ok(downloaded) => {
                 new_chapters += downloaded;
                 subscription.last_error = None;
@@ -1288,6 +1296,7 @@ fn check_one(
     subscription: &mut Subscription,
     options: &CheckOptions,
     job_id: &str,
+    status_aliases: &[crate::core::status_aliases::StatusAlias],
 ) -> Result<usize> {
     if let Some(reason) = blocked_reason(&ws.store, &subscription.url) {
         return Err(FeroError::ExternalApi(reason));
@@ -1305,6 +1314,7 @@ fn check_one(
     // for why this is tracked separately from last_check_unix.
     subscription.last_success_unix = Some(unix_now());
     apply_series_info(subscription, &info, options.metadata_mode);
+    apply_source_status_text(subscription, info.source_status_text.as_deref(), status_aliases);
     enrich_from_anilist(subscription);
 
     // Diff by normalized URL. Chapters that vanished upstream are kept —

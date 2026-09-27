@@ -18,6 +18,7 @@ const POST_ROUTES: &[&str] = &[
     "/api/relocate",
     "/api/data-dir/save",
     "/api/targets/save",
+    "/api/status-aliases/save",
     "/api/schedule/save",
     "/api/select-folder",
     "/api/reveal",
@@ -52,6 +53,7 @@ const GET_ROUTES: &[&str] = &[
     "/api/cover",
     "/api/targets",
     "/api/source-health",
+    "/api/status-aliases/pending",
     "/api/schedule",
     "/api/platform-search",
     "/api/anilist-search",
@@ -144,6 +146,14 @@ pub(super) fn handle_request(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         "/api/source-health" => json_outcome(
             &build_source_health_response(),
             StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        "/api/status-aliases/pending" => json_outcome(
+            &build_pending_status_response(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        "/api/status-aliases/save" => json_outcome(
+            &build_save_status_alias_response(request.body()),
+            StatusCode::BAD_REQUEST,
         ),
         "/api/targets/save" => json_outcome(
             &build_save_targets_response(request.body()),
