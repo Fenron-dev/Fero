@@ -151,15 +151,16 @@ pub fn should_check(
 /// The status that actually applies, out of the three that can disagree.
 ///
 /// Precedence, strongest first: what the user set by hand, what the status
-/// source last said, and finally the `completed`/`hiatus` flags. The hand
-/// setting has to win outright — otherwise the next check run silently undoes
-/// it, which is what happened while `completed` served as both the user's
-/// switch and the scraper's output.
+/// source last said, and finally the `completed`/`hiatus`/`dropped` flags. The
+/// hand setting has to win outright — otherwise the next check run silently
+/// undoes it, which is what happened while `completed` served as both the
+/// user's switch and the scraper's output.
 pub fn effective(
     manual: Option<SeriesStatus>,
     detected: SeriesStatus,
     completed: bool,
     hiatus: bool,
+    dropped: bool,
 ) -> SeriesStatus {
     if let Some(manual) = manual {
         return manual;
@@ -171,8 +172,58 @@ pub fn effective(
         SeriesStatus::Completed
     } else if hiatus {
         SeriesStatus::Hiatus
+    } else if dropped {
+        SeriesStatus::Dropped
     } else {
         SeriesStatus::Unknown
+    }
+}
+
+/// Reads a life-cycle status out of free-form text a source printed on its own
+/// page — "Ongoing", "On Hold", "Dropped by Group", "Complete", …
+///
+/// This is deliberately separate from [`resolve`] and [`resolve_comic`]: those
+/// two combine several *structured* facts (a database's publication state,
+/// whether every listed chapter is here); this one guesses at a single string
+/// nobody agreed on a vocabulary for. Two sites both saying "the story is
+/// finished" write it as "Completed" and "Complete" and "Finished" — and one
+/// stalled indefinitely writes "Hiatus", "On Hold", or "Paused". Whatever a
+/// caller cannot place here either is not covered yet, or is source-specific
+/// enough that guessing would be worse than asking — see
+/// `core::status_aliases` for what happens with those.
+///
+/// Checked in this order because a real page can combine several of these
+/// words ("no longer on hiatus, fully completed") and the rarer, more specific
+/// word should win over a generic one that happens to appear alongside it.
+pub fn classify_status_text(text: &str) -> Option<SeriesStatus> {
+    let lower = text.trim().to_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    const HIATUS: [&str; 5] = ["hiatus", "on hold", "on-hold", "paused", "pausiert"];
+    const DROPPED: [&str; 6] = [
+        "dropped",
+        "cancelled",
+        "canceled",
+        "discontinued",
+        "abandoned",
+        "abgebrochen",
+    ];
+    const COMPLETED: [&str; 5] = ["completed", "complete", "finished", "ended", "abgeschlossen"];
+    const ONGOING: [&str; 6] = [
+        "ongoing", "on-going", "publishing", "releasing", "active", "laufend",
+    ];
+
+    if HIATUS.iter().any(|word| lower.contains(word)) {
+        Some(SeriesStatus::Hiatus)
+    } else if DROPPED.iter().any(|word| lower.contains(word)) {
+        Some(SeriesStatus::Dropped)
+    } else if COMPLETED.iter().any(|word| lower.contains(word)) {
+        Some(SeriesStatus::Completed)
+    } else if ONGOING.iter().any(|word| lower.contains(word)) {
+        Some(SeriesStatus::Ongoing)
+    } else {
+        None
     }
 }
 
@@ -262,6 +313,44 @@ pub fn resolve(facts: &SeriesStatusFacts, local_last_chapter: Option<u32>) -> Se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_common_english_wordings() {
+        assert_eq!(classify_status_text("Completed"), Some(SeriesStatus::Completed));
+        assert_eq!(classify_status_text("Complete"), Some(SeriesStatus::Completed));
+        assert_eq!(classify_status_text("Finished"), Some(SeriesStatus::Completed));
+        assert_eq!(classify_status_text("Ongoing"), Some(SeriesStatus::Ongoing));
+        assert_eq!(classify_status_text("Publishing"), Some(SeriesStatus::Ongoing));
+        assert_eq!(classify_status_text("Hiatus"), Some(SeriesStatus::Hiatus));
+        assert_eq!(classify_status_text("On Hold"), Some(SeriesStatus::Hiatus));
+        assert_eq!(classify_status_text("Dropped"), Some(SeriesStatus::Dropped));
+        assert_eq!(classify_status_text("Discontinued"), Some(SeriesStatus::Dropped));
+    }
+
+    #[test]
+    fn is_case_and_whitespace_insensitive() {
+        assert_eq!(
+            classify_status_text("  CoMPLeted  "),
+            Some(SeriesStatus::Completed)
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_wording_answers_none_rather_than_guess() {
+        assert_eq!(classify_status_text("Season 2 confirmed"), None);
+        assert_eq!(classify_status_text(""), None);
+        assert_eq!(classify_status_text("   "), None);
+    }
+
+    /// A specific word must win over a generic one that happens to sit next
+    /// to it — a page can plausibly say both in the same breath.
+    #[test]
+    fn a_specific_word_outranks_a_generic_one_in_the_same_text() {
+        assert_eq!(
+            classify_status_text("No longer on hiatus, fully completed"),
+            Some(SeriesStatus::Hiatus)
+        );
+    }
 
     fn facts(
         original: OriginalStatus,
@@ -421,6 +510,7 @@ mod tests {
                 Some(SeriesStatus::Completed),
                 SeriesStatus::Ongoing,
                 false,
+                false,
                 false
             ),
             SeriesStatus::Completed
@@ -430,6 +520,7 @@ mod tests {
                 Some(SeriesStatus::Ongoing),
                 SeriesStatus::Completed,
                 true,
+                false,
                 false
             ),
             SeriesStatus::Ongoing
@@ -439,19 +530,23 @@ mod tests {
     #[test]
     fn without_a_hand_setting_the_source_decides_and_the_flags_fill_in() {
         assert_eq!(
-            effective(None, SeriesStatus::Dropped, true, false),
+            effective(None, SeriesStatus::Dropped, true, false, false),
             SeriesStatus::Dropped
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, true, false),
+            effective(None, SeriesStatus::Unknown, true, false, false),
             SeriesStatus::Completed
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, false, true),
+            effective(None, SeriesStatus::Unknown, false, true, false),
             SeriesStatus::Hiatus
         );
         assert_eq!(
-            effective(None, SeriesStatus::Unknown, false, false),
+            effective(None, SeriesStatus::Unknown, false, false, true),
+            SeriesStatus::Dropped
+        );
+        assert_eq!(
+            effective(None, SeriesStatus::Unknown, false, false, false),
             SeriesStatus::Unknown
         );
     }

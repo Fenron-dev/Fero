@@ -109,9 +109,15 @@ pub struct Subscription {
     /// Marked as finished — suppresses batch packaging and periodic checks.
     #[serde(default)]
     pub completed: bool,
-    /// Abandoned upstream (never finished) — periodic checks are skipped.
+    /// Paused upstream, no announced end — periodic checks slow down but
+    /// never stop (a hiatus can end without warning).
     #[serde(default)]
     pub hiatus: bool,
+    /// Abandoned upstream (never finished) — periodic checks slow down for
+    /// the same reason as `hiatus`: a translation group can pick a dropped
+    /// serial back up years later.
+    #[serde(default)]
+    pub dropped: bool,
     /// Paused subscriptions are skipped by checks but keep their data.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -198,6 +204,15 @@ pub struct Subscription {
     /// Human-readable error from the last failed check, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// The life-cycle status text the *subscribed* source itself last
+    /// printed on its page — "Ongoing", "On Hold", whatever wording it uses —
+    /// independent of `status_source_url` (which is always NovelUpdates).
+    ///
+    /// Kept even when [`crate::core::status::classify_status_text`] cannot
+    /// place it: that is exactly the text `core::status_aliases` needs in
+    /// order to ask the user once and remember the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_status_text: Option<String>,
     /// UNIX timestamp of subscription creation.
     pub created_at_unix: u64,
     /// Set while the subscription sits in the in-app trash (soft delete).
@@ -276,6 +291,7 @@ impl Subscription {
             right_to_left: false,
             completed: false,
             hiatus: false,
+            dropped: false,
             enabled: true,
             series_status: SeriesStatus::Unknown,
             status_override: None,
@@ -292,6 +308,7 @@ impl Subscription {
             last_check_unix: None,
             last_success_unix: None,
             last_error: None,
+            source_status_text: None,
             created_at_unix: unix_now(),
             trashed_at_unix: None,
         }
@@ -307,7 +324,29 @@ impl Subscription {
             self.series_status,
             self.completed,
             self.hiatus,
+            self.dropped,
         )
+    }
+
+    /// Applies a life-cycle status read off the *subscribed* source's own
+    /// page — via [`crate::core::status::classify_status_text`] or a
+    /// confirmed [`crate::core::status_aliases`] entry — the same one-way
+    /// rule `completed_hint` already follows: this only ever turns a flag
+    /// on, never off. Only [`Self::reopen`] turns them off again, because new
+    /// chapters are proof and a status word someone typed once is not.
+    ///
+    /// A hand-set status always wins, so this is a no-op while one is set —
+    /// otherwise the very next check would silently undo the user's choice.
+    pub fn apply_source_status(&mut self, status: SeriesStatus) {
+        if self.status_override.is_some() {
+            return;
+        }
+        match status {
+            SeriesStatus::Completed => self.completed = true,
+            SeriesStatus::Hiatus => self.hiatus = true,
+            SeriesStatus::Dropped => self.dropped = true,
+            SeriesStatus::Ongoing | SeriesStatus::Licensed | SeriesStatus::Unknown => {}
+        }
     }
 
     /// Number of chapters a check run would still want to fetch.
@@ -334,6 +373,7 @@ impl Subscription {
         self.status_override = None;
         self.completed = false;
         self.hiatus = false;
+        self.dropped = false;
         self.series_status = SeriesStatus::Ongoing;
         true
     }
@@ -788,6 +828,42 @@ mod tests {
         sub.series_status = SeriesStatus::Licensed;
         assert!(!sub.reopen());
         assert_eq!(sub.effective_status(), SeriesStatus::Licensed);
+    }
+
+    #[test]
+    fn a_source_status_sets_the_matching_flag_and_nothing_else() {
+        let mut sub = Subscription::new("https://example.com/x", "novelphoenix", "X");
+
+        sub.apply_source_status(SeriesStatus::Hiatus);
+
+        assert!(sub.hiatus);
+        assert!(!sub.completed);
+        assert!(!sub.dropped);
+        assert_eq!(sub.effective_status(), SeriesStatus::Hiatus);
+    }
+
+    /// One-way, like `completed_hint` already is: a status word seen once is
+    /// not proof the way new chapters are, so only `reopen()` clears it.
+    #[test]
+    fn a_source_status_never_clears_a_flag_by_itself() {
+        let mut sub = Subscription::new("https://example.com/x", "novelphoenix", "X");
+        sub.apply_source_status(SeriesStatus::Completed);
+        assert!(sub.completed);
+
+        sub.apply_source_status(SeriesStatus::Ongoing);
+
+        assert!(sub.completed, "Ongoing must not silently undo Completed");
+    }
+
+    #[test]
+    fn a_hand_setting_blocks_a_source_status_from_taking_hold() {
+        let mut sub = Subscription::new("https://example.com/x", "novelphoenix", "X");
+        sub.status_override = Some(SeriesStatus::Ongoing);
+
+        sub.apply_source_status(SeriesStatus::Dropped);
+
+        assert!(!sub.dropped);
+        assert_eq!(sub.effective_status(), SeriesStatus::Ongoing);
     }
 
     #[test]

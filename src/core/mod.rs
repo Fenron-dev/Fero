@@ -7,6 +7,7 @@ pub mod epub;
 pub mod manga;
 pub mod source_health;
 pub mod status;
+pub mod status_aliases;
 pub mod subscription;
 pub mod vault;
 pub mod webnovel;
